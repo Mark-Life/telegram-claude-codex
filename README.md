@@ -27,6 +27,8 @@ Telegram bot interface for Claude Code on a VPS. Message the bot from any device
 - [ffmpeg](https://ffmpeg.org/) — required for voice messages >20MB (chunked transcription)
 - [Groq](https://console.groq.com/) API key — for voice message transcription
 
+> **Note:** This bot uses `claude -p` (programmatic usage). Starting June 15, 2026, paid Claude plans include a dedicated monthly credit for programmatic usage (`claude -p`, Agent SDK, GitHub Actions). Usage draws from this credit first, then from optional usage credits at API rates. See [Anthropic's announcement](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for details and credit amounts by plan.
+
 ## Setup
 
 ### 1. Create Telegram Bot
