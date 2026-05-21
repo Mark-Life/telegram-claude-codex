@@ -1,15 +1,7 @@
 import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-
-export interface SessionInfo {
-  lastActiveAt: string;
-  projectName: string;
-  projectPath: string;
-  sessionId: string;
-  startedAt: string;
-  summary: string;
-}
+import type { SessionInfo } from "./types";
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const MAX_SESSIONS = 50;

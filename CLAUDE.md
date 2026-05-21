@@ -14,27 +14,40 @@ bun run fix          # auto-fix lint/format issues
 
 ## Architecture
 
-Telegram bot that bridges Claude Code CLI with Telegram. Spawns `claude` CLI as a child process, streams JSON output, and progressively edits Telegram messages with the response.
+Telegram bot that bridges coding-agent CLIs (Claude Code + OpenAI Codex) with Telegram. Spawns the active provider's CLI as a child process, streams its JSON output, normalizes it to a provider-agnostic event model, and progressively edits Telegram messages with the response. The active provider is swappable at runtime via `/provider`.
 
 ### Module Overview (src/)
 
-- **index.ts** — Entry point. Validates env vars (`BOT_TOKEN`, `ALLOWED_USER_ID`, `GROQ_API_KEY`, optional `PROJECTS_DIR`), starts bot.
-- **bot.ts** — Grammy bot setup, command handlers (`/projects`, `/stop`, `/status`, `/new`), message routing. Maintains per-user state: `activeProject` path and `sessions` map (projectPath → Claude sessionId).
-- **claude.ts** — Spawns `claude -p "<prompt>" --output-format stream-json` in the active project dir. Returns `AsyncGenerator<ClaudeEvent>` yielding `text_delta` and `result` events. Tracks one active process per user via `Map<userId, AbortController>`. Resumes sessions with `-r <sessionId>`. 10-min timeout.
-- **telegram.ts** — Consumes the Claude event stream via `sendMessageDraft` (300ms interval) with fallback to progressive `editMessageText`. Auto-splits at 4000 chars. Converts Markdown → Telegram HTML (code blocks, bold, italic, links). Falls back to plain text on parse failure. Appends cost/duration/turns footer.
+- **index.ts** — Entry point. Validates env vars (`BOT_TOKEN`, `ALLOWED_USER_ID`, `GROQ_API_KEY`, optional `PROJECTS_DIR`), warns (non-blocking) if `codex login status` fails, registers commands (incl. `/provider`), starts bot.
+- **bot.ts** — Grammy bot setup, command handlers (`/projects`, `/provider`, `/stop`, `/status`, `/new`, …), message routing, capability gating. Maintains per-user state: `activeProject` path, `activeProvider`, and per-provider `sessions` maps.
+- **state.ts** — Persisted bot state (`.data/state.json`). Holds `activeProject`, `activeProvider`, and provider-namespaced `sessions`. One-time migration of the old flat-session shape → `{activeProvider:"claude", sessions:{claude:<old>, codex:{}}}`.
+- **telegram.ts** — Consumes the normalized `AgentEvent` stream via `sendMessageDraft` (300ms interval) with fallback to progressive `editMessageText`. Auto-splits at 4000 chars. Converts Markdown → Telegram HTML. Falls back to plain text on parse failure. Footer/thinking/subagent/plan UI gated on the active provider's capabilities.
 - **transcribe.ts** — Voice message transcription via Groq Whisper (`whisper-large-v3-turbo`). Files >20MB chunked with ffmpeg.
+
+#### agent/ — provider abstraction layer
+
+- **types.ts** — `AgentEvent` (normalized event model), `ProviderId` (`"claude"|"codex"`), `RunOptions`, `ProviderCapabilities` (`{cost, planMode, subagents, thinking}`), `SessionInfo`, `ProviderSpec`, `AgentProvider`.
+- **runner.ts** — Generic process lifecycle: global one-process-per-user (keyed by userId, across providers), AbortController, 10-min timeout, stdout line-buffering, stderr capture. AsyncGenerator yielding `AgentEvent`.
+- **claude.ts** — Claude `AgentProvider`: builds `claude -p … --output-format stream-json` args/env + stream-json parser + `.claude/plans/`/`ExitPlanMode` plan detection. Caps: all true.
+- **claude-history.ts** — `~/.claude/projects/...` session reader.
+- **codex.ts** — Codex `AgentProvider`: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check` (resume via `codex exec resume <id> …`; cwd comes from the spawn). JSONL→`AgentEvent` parser, `.codex/plans/`→`plan_ready` detection. File-send + plan-convention instructions injected via first-turn prompt prefix (Codex has no `--append-system-prompt`). Caps: `{planMode:true, thinking:true, cost:false, subagents:false}`.
+- **codex-history.ts** — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` session reader; project filtering via recorded cwd (realpath-normalized).
+- **registry.ts** — `getProvider(id)`, `listProviders()` (claude + codex registered).
+- **index.ts** — Public surface: `runAgent(providerId, opts)`, `stopAgent`, `hasActiveProcess`, `stopAll`, `listAllSessions(p)`, `getSessionProject(p, id)`, `clearSessionCache(p)`, `getCapabilities(p)`.
 
 ### Data Flow
 
 ```
 User message → bot.ts (access control + routing)
-  → text: handlePrompt() → claude.ts (spawn CLI) → telegram.ts (stream to chat)
+  → text: handlePrompt() → runAgent(activeProvider) → provider spec (spawn CLI via runner) → telegram.ts (stream to chat)
   → voice: transcribe.ts (Groq Whisper) → handlePrompt() → same flow
 ```
 
 ### Key Patterns
 
-- **Session continuity**: Claude session IDs stored per project in user state. Follow-up messages resume the same conversation.
-- **One process per user**: New prompt aborts any running Claude process for that user.
-- **Streaming**: AsyncGenerator pattern — claude.ts yields events, telegram.ts consumes and streams via `sendMessageDraft` (with edit-based fallback). Draft support auto-detected on first event.
+- **Provider abstraction**: Each provider is an `AgentProvider` (spec + capabilities + history reader) in the registry. The generic `runner.ts` spawns it and emits normalized `AgentEvent`s — the seam that decouples bot.ts/telegram.ts from any specific CLI. UI features are gated on `getCapabilities(activeProvider)` (e.g. Codex shows duration only, no cost/turns; shows thinking; hides subagents).
+- **Session continuity**: Session IDs stored per provider per project in user state. Follow-up messages resume the same conversation for the active provider.
+- **One process per user**: Global, across providers — a new prompt (or a `/provider` switch) aborts any running process for that user.
+- **Plan mode (organic, no `/plan` command)**: Both providers support plan mode via path conventions. Claude uses `.claude/plans/` + `ExitPlanMode`; Codex is taught the `.codex/plans/PLAN.md` convention via its injected prompt prefix. Either emits `plan_ready`, feeding the same downstream review/approve UI.
+- **Streaming**: AsyncGenerator pattern — the runner yields events, telegram.ts consumes and streams via `sendMessageDraft` (with edit-based fallback). Draft support auto-detected on first event.
 - **HTML formatting**: Markdown converted via regex with placeholder system — code blocks extracted first to avoid nested regex conflicts, then reinserted after other transformations.

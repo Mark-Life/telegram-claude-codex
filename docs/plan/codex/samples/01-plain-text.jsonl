@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"019e4b79-e4cc-7572-9ccd-18ce6d7a9ba7"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Hello, nice to meet you."}}
+{"type":"turn.completed","usage":{"input_tokens":13412,"cached_input_tokens":11648,"output_tokens":11,"reasoning_output_tokens":0}}

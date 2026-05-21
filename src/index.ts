@@ -1,5 +1,29 @@
+import { spawn } from "bun";
+import { stopAll } from "./agent";
+import { getProvider } from "./agent/registry";
 import { cleanupStaleState, createBot } from "./bot";
-import { stopAll } from "./claude";
+import { loadPersistedState } from "./state";
+
+/** Warn (but never block startup) if the Codex CLI is missing or not logged in */
+const checkCodexAvailable = async () => {
+  try {
+    const proc = spawn({
+      cmd: ["codex", "login", "status"],
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) {
+      console.warn(
+        "Codex CLI present but not logged in — /provider Codex will fail. Run `codex login`."
+      );
+    }
+  } catch {
+    console.warn(
+      "Codex CLI not found — /provider Codex unavailable. Install codex to enable it."
+    );
+  }
+};
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ALLOWED_USER_ID = process.env.ALLOWED_USER_ID;
@@ -55,9 +79,11 @@ process.on("SIGINT", shutdown);
 bot.start({
   onStart: () => {
     console.log("Bot started");
+    checkCodexAvailable();
     cleanupTimer = setInterval(cleanupStaleState, CLEANUP_INTERVAL);
     const commands = [
       { command: "projects", description: "Switch active project" },
+      { command: "provider", description: "Switch coding agent provider" },
       { command: "history", description: "Resume a past session" },
       { command: "new", description: "Start fresh conversation" },
       { command: "stop", description: "Kill active process" },
@@ -78,8 +104,19 @@ bot.start({
     Promise.all(
       scopes.map((scope) => bot.api.setMyCommands(commands, { scope }))
     ).catch((e) => console.error("Failed to set bot commands:", e));
+    const persisted = loadPersistedState();
+    const providerId = persisted?.activeProvider ?? "claude";
+    let providerName: string = providerId;
+    try {
+      providerName = getProvider(providerId).displayName;
+    } catch {
+      providerName = providerId;
+    }
     bot.api
-      .sendMessage(userId, `Bot started at ${new Date().toLocaleString()}`)
+      .sendMessage(
+        userId,
+        `Bot started at ${new Date().toLocaleString()}\nProvider: ${providerName}`
+      )
       .catch((e) => console.error("Failed to send startup message:", e));
   },
 });

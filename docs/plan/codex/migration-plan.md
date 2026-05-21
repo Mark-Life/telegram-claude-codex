@@ -141,8 +141,13 @@ Depends on Phase 0 + Phase 2.
 - Subagent messages hidden when `capabilities.subagents` is false.
 **DoD:** no Claude-only feature throws under Codex; both providers give a clean UX.
 
-### Phase 6 — Codex plan mode  *(PLACEHOLDER — defined by Phase 1)*
-> To be rewritten from Phase 1's DoD. Will contain: chosen detection approach, parser changes in `src/agent/codex.ts`, any new path convention, `bot.ts` gating changes, and `capabilities.planMode` flipped to `true` for Codex. Until this phase lands, Codex runs with plan mode disabled.
+### Phase 6 — Codex plan mode  *(IMPLEMENTED — Outcome 1)*
+Chosen approach (from [codex-plan-mode.md](./codex-plan-mode.md)): **organic plan mode**, symmetric with Claude (no `/plan` command).
+- **Detection:** Codex's first-turn prompt prefix teaches it the convention "when asked to plan without implementing, write the plan to `./.codex/plans/PLAN.md` and stop." The parser in `src/agent/codex.ts` emits `{ kind: "plan_ready", planPath }` when a `file_change` event's path includes `.codex/plans/` (deduped once per run). Mirrors Claude's `.claude/plans/` + `ExitPlanMode` detection; the file write itself is the trigger (no exit-plan signal needed).
+- **`bot.ts` changes:** none — the plan review/approve/execute UI is provider-agnostic and already gated on `capabilities.planMode` (Phase 5).
+- **Capability:** `capabilities.planMode` flipped to `true` for Codex.
+- **Verified:** live `codex exec` planning run wrote `PLAN.md`, made no source edits, and the parser emitted `plan_ready`.
+- **Caveat:** relies on model compliance (writing to the path). Graceful degrade if it doesn't (run completes normally, no plan buttons). A prose-fallback (treat final message as the plan) is documented but deferred until real non-compliance is observed.
 
 ### Phase 7 — Docs & cleanup
 **Do:** update `CLAUDE.md` (architecture section, `src/agent/` layout, provider concept), `README.md` (`/provider`, `codex login` setup), env var docs. Remove any remaining Claude-specific naming in shared code.
@@ -157,6 +162,6 @@ Depends on Phase 0 + Phase 2.
 - **Auth model:** both providers use CLI-managed login, not API keys — Claude Code CLI login today, `codex login` for Codex (run once on the host, browser-based flow). The bot never handles credentials or API key env vars. Auth checks are warn-only so a host with only one provider logged in still starts.
 - **Extensibility:** the registry pattern supports N providers — adding a third (e.g. Gemini CLI) later = one new `ProviderSpec` + registry entry, no `bot.ts`/`telegram.ts` changes.
 
-## Unresolved questions
+## Resolved questions
 
-1. **Codex headless safety** — `--dangerously-bypass-approvals-and-sandbox` vs `--ask-for-approval never --sandbox workspace-write`. Depends on whether the bot host is itself sandboxed. Needs more research before deciding; blocks Phase 4.
+1. **Codex headless safety** — **RESOLVED: use `--dangerously-bypass-approvals-and-sandbox` + `--skip-git-repo-check`.** Rationale: parity with the bot's existing Claude config (`--dangerously-skip-permissions`), which already runs fully unsandboxed on this host; the bot is operated by a single trusted user on their own machine. The safer `--sandbox workspace-write` (writes confined to the project, no network) remains a drop-in alternative if the deployment context changes — swap the flag in `src/agent/codex.ts` `buildArgs`.

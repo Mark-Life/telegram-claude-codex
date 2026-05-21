@@ -1,4 +1,9 @@
-import { spawn } from "bun";
+import {
+  clearSessionCache,
+  getSessionProject,
+  listAllSessions,
+} from "./claude-history";
+import type { AgentEvent, AgentProvider, RunOptions } from "./types";
 
 type ContentBlockStart =
   | { type: "text"; text: string }
@@ -69,41 +74,6 @@ type StreamEvent =
       num_turns: number;
     };
 
-export type ClaudeEvent =
-  | { kind: "session_init"; sessionId: string }
-  | { kind: "text_delta"; text: string }
-  | { kind: "tool_use"; name: string; input: string }
-  | { kind: "thinking_start" }
-  | { kind: "thinking_delta"; text: string }
-  | { kind: "thinking_done"; durationMs: number }
-  | { kind: "plan_ready"; planPath: string }
-  | { kind: "agent_started"; taskId: string; description: string }
-  | {
-      kind: "agent_done";
-      taskId: string;
-      description: string;
-      status: string;
-      durationMs?: number;
-      totalTokens?: number;
-      toolUses?: number;
-    }
-  | {
-      kind: "result";
-      text: string;
-      sessionId: string;
-      cost: number;
-      durationMs: number;
-      turns: number;
-    }
-  | { kind: "error"; message: string };
-
-interface ProcessEntry {
-  ac: AbortController;
-  done: Promise<void>;
-}
-const userProcesses = new Map<number, ProcessEntry>();
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
 /** Format tool input into a short description */
 function formatToolInput(name: string, input: Record<string, unknown>) {
   switch (name) {
@@ -141,7 +111,7 @@ function createStreamParser() {
   let thinkingStartTime = 0;
   let lastPlanPath = "";
 
-  return function* parseStreamLines(lines: string[]): Generator<ClaudeEvent> {
+  return function* parseStreamLines(lines: string[]): Generator<AgentEvent> {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) {
@@ -261,7 +231,7 @@ function createStreamParser() {
   };
 }
 
-const SCRIPT_DIR = new URL("../scripts", import.meta.url).pathname;
+const SCRIPT_DIR = new URL("../../scripts", import.meta.url).pathname;
 
 /** Build system prompt snippet telling Claude how to send files to the user */
 function buildFileSystemPrompt() {
@@ -274,30 +244,11 @@ function buildFileSystemPrompt() {
   ].join(" ");
 }
 
-/** Spawn claude CLI and yield streaming events, tracked per Telegram user */
-export async function* runClaude(
-  telegramUserId: number,
-  prompt: string,
-  projectDir: string,
-  chatId: number,
-  sessionId?: string
-): AsyncGenerator<ClaudeEvent> {
-  const existing = userProcesses.get(telegramUserId);
-  if (existing) {
-    if (!existing.ac.signal.aborted) {
-      yield {
-        kind: "error",
-        message: "A Claude process is already running. Use /stop first.",
-      };
-      return;
-    }
-    await existing.done;
-  }
-
+/** Build the claude CLI arguments for a run */
+function buildArgs(opts: RunOptions) {
   const args = [
-    "claude",
     "-p",
-    prompt,
+    opts.prompt,
     "--output-format",
     "stream-json",
     "--verbose",
@@ -306,113 +257,36 @@ export async function* runClaude(
     "--append-system-prompt",
     buildFileSystemPrompt(),
   ];
-  if (sessionId) {
-    args.push("-r", sessionId);
+  if (opts.sessionId) {
+    args.push("-r", opts.sessionId);
   }
+  return args;
+}
 
-  const ac = new AbortController();
-  let resolveCleanup!: () => void;
-  const done = new Promise<void>((r) => {
-    resolveCleanup = r;
-  });
-  userProcesses.set(telegramUserId, { ac, done });
-
-  const { CLAUDECODE: _, ...restEnv } = process.env as Record<
+/** Build the claude CLI environment: strip CLAUDECODE, inject TELEGRAM_CHAT_ID */
+function buildEnv(opts: RunOptions, base: Record<string, string | undefined>) {
+  const { CLAUDECODE: _, ...restEnv } = base;
+  return { ...restEnv, TELEGRAM_CHAT_ID: String(opts.chatId) } as Record<
     string,
-    string | undefined
+    string
   >;
-  const env = { ...restEnv, TELEGRAM_CHAT_ID: String(chatId) };
-  const proc = spawn({
-    cmd: args,
-    cwd: projectDir,
-    stdout: "pipe",
-    stderr: "pipe",
-    env,
-    signal: ac.signal,
-  });
-
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    ac.abort();
-  }, DEFAULT_TIMEOUT_MS);
-
-  let stderrBuffer = "";
-  const stderrDrain = (async () => {
-    const reader = proc.stderr.getReader();
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      stderrBuffer += decoder.decode(value, { stream: true });
-    }
-  })();
-
-  try {
-    const reader = proc.stdout.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const parseStreamLines = createStreamParser();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      yield* parseStreamLines(lines);
-    }
-
-    if (buffer.trim()) {
-      yield* parseStreamLines([buffer]);
-    }
-
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) {
-      await stderrDrain;
-      yield {
-        kind: "error",
-        message: stderrBuffer.trim() || `Process exited with code ${exitCode}`,
-      };
-    }
-  } catch (_err) {
-    const reason = timedOut ? "Process timed out." : "Process was stopped.";
-    const detail = stderrBuffer.trim();
-    yield { kind: "error", message: detail ? `${reason}\n${detail}` : reason };
-  } finally {
-    clearTimeout(timeout);
-    proc.kill();
-    await proc.exited;
-    await stderrDrain.catch(() => {});
-    userProcesses.delete(telegramUserId);
-    resolveCleanup();
-  }
 }
 
-/** Stop the active Claude process for a user */
-export function stopClaude(telegramUserId: number) {
-  const entry = userProcesses.get(telegramUserId);
-  if (!entry || entry.ac.signal.aborted) {
-    return false;
-  }
-  entry.ac.abort();
-  return true;
-}
-
-/** Check if a user has an active process */
-export function hasActiveProcess(telegramUserId: number) {
-  const entry = userProcesses.get(telegramUserId);
-  return !!entry && !entry.ac.signal.aborted;
-}
-
-/** Abort all active Claude processes (used during shutdown) */
-export function stopAll() {
-  for (const entry of userProcesses.values()) {
-    entry.ac.abort();
-  }
-}
+/** Claude Code provider definition */
+export const claudeProvider: AgentProvider = {
+  id: "claude",
+  command: "claude",
+  displayName: "Claude Code",
+  capabilities: {
+    planMode: true,
+    thinking: true,
+    cost: true,
+    subagents: true,
+  },
+  buildArgs,
+  buildEnv,
+  createParser: createStreamParser,
+  listAllSessions,
+  getSessionProject,
+  clearSessionCache,
+};

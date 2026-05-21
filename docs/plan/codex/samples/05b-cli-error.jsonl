@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"019e4b7b-1221-7012-a8b4-07806f6ca163"}
+{"type":"turn.started"}
+{"type":"error","message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'nonexistent-model-xyz' model is not supported when using Codex with a ChatGPT account.\"}}"}
+{"type":"turn.failed","error":{"message":"{\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'nonexistent-model-xyz' model is not supported when using Codex with a ChatGPT account.\"}}"}}

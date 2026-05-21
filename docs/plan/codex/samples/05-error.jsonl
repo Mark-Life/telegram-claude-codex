@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"019e4b7a-b2a5-7312-888f-aa343335a252"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc 'cat /nonexistent/path/xyz123.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc 'cat /nonexistent/path/xyz123.txt'","aggregated_output":"cat: /nonexistent/path/xyz123.txt: No such file or directory\n","exit_code":1,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Exit code: `1`"}}
+{"type":"turn.completed","usage":{"input_tokens":26960,"cached_input_tokens":24832,"output_tokens":50,"reasoning_output_tokens":0}}

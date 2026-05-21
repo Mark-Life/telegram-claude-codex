@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"019e4b7a-d274-78d1-934f-55fb08200cbd"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc 'echo hello-from-shell'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc 'echo hello-from-shell'","aggregated_output":"hello-from-shell\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"`echo hello-from-shell` output:\n\n```text\nhello-from-shell\n```"}}
+{"type":"turn.completed","usage":{"input_tokens":26954,"cached_input_tokens":17664,"output_tokens":97,"reasoning_output_tokens":0}}
