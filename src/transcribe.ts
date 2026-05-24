@@ -1,13 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { $ } from "bun";
 import Groq from "groq-sdk";
 
 const groq = new Groq();
-const MAX_SIZE = 20 * 1024 * 1024;
 const TRANSCRIBE_TIMEOUT = 60_000;
-const FFMPEG_TIMEOUT = 30_000;
 
 /** Race a promise against a timeout, rejecting with a descriptive error */
 function withTimeout<T>(
@@ -26,51 +20,13 @@ function withTimeout<T>(
   ]);
 }
 
-/** Transcribe audio buffer using Groq Whisper, chunking if >20MB */
+/**
+ * Transcribe an audio buffer using Groq Whisper.
+ *
+ * Telegram caps bot file downloads at 20MB, so buffers always fit within
+ * Groq's request limit in a single call.
+ */
 export async function transcribeAudio(buffer: Buffer, filename: string) {
-  if (buffer.length <= MAX_SIZE) {
-    return transcribeChunk(buffer, filename);
-  }
-
-  const tempDir = await mkdtemp(join(tmpdir(), "tg-voice-"));
-
-  try {
-    const inputPath = join(tempDir, filename);
-    await Bun.write(inputPath, buffer);
-
-    const probeResult = await withTimeout(
-      $`ffprobe -v error -show_entries format=duration -of csv=p=0 ${inputPath}`.text(),
-      FFMPEG_TIMEOUT,
-      "ffprobe"
-    );
-    const totalDuration = Number.parseFloat(probeResult.trim());
-    const numChunks = Math.ceil(buffer.length / MAX_SIZE);
-    const chunkDuration = totalDuration / numChunks;
-
-    const transcriptions: string[] = [];
-
-    for (let i = 0; i < numChunks; i++) {
-      const start = i * chunkDuration;
-      const chunkPath = join(tempDir, `chunk_${i}.ogg`);
-      await withTimeout(
-        $`ffmpeg -y -i ${inputPath} -ss ${start} -t ${chunkDuration} -c copy ${chunkPath}`.quiet(),
-        FFMPEG_TIMEOUT,
-        "ffmpeg"
-      );
-
-      const chunkBuffer = Buffer.from(await Bun.file(chunkPath).arrayBuffer());
-      const text = await transcribeChunk(chunkBuffer, `chunk_${i}.ogg`);
-      transcriptions.push(text);
-    }
-
-    return transcriptions.join(" ");
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
-}
-
-/** Transcribe a single audio buffer */
-async function transcribeChunk(buffer: Buffer, filename: string) {
   const file = new File([new Uint8Array(buffer)], filename, {
     type: "audio/ogg",
   });

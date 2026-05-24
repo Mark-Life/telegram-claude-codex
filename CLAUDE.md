@@ -22,7 +22,7 @@ Telegram bot that bridges Claude Code CLI with Telegram. Spawns `claude` CLI as 
 - **bot.ts** — Grammy bot setup, command handlers (`/projects`, `/stop`, `/status`, `/new`), message routing. Maintains per-user state: `activeProject` path and `sessions` map (projectPath → Claude sessionId).
 - **claude.ts** — Spawns `claude -p "<prompt>" --output-format stream-json` in the active project dir. Returns `AsyncGenerator<ClaudeEvent>` yielding `text_delta` and `result` events. Tracks one active process per user via `Map<userId, AbortController>`. Resumes sessions with `-r <sessionId>`. 10-min timeout.
 - **telegram.ts** — Consumes the Claude event stream via `sendMessageDraft` (300ms interval) with fallback to progressive `editMessageText`. Auto-splits at 4000 chars. Converts Markdown → Telegram HTML (code blocks, bold, italic, links). Falls back to plain text on parse failure. Appends cost/duration/turns footer.
-- **transcribe.ts** — Voice message transcription via Groq Whisper (`whisper-large-v3-turbo`). Files >20MB chunked with ffmpeg.
+- **transcribe.ts** — Voice message transcription via Groq Whisper (`whisper-large-v3-turbo`).
 
 ### Data Flow
 

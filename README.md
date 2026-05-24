@@ -24,7 +24,6 @@ Telegram bot interface for Claude Code on a VPS. Message the bot from any device
 
 - [Bun](https://bun.sh/) runtime
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated
-- [ffmpeg](https://ffmpeg.org/) — required for voice messages >20MB (chunked transcription)
 - [Groq](https://console.groq.com/) API key — for voice message transcription
 
 > **Note:** This bot uses `claude -p` (programmatic usage). Starting June 15, 2026, paid Claude plans include a dedicated monthly credit for programmatic usage (`claude -p`, Agent SDK, GitHub Actions). Usage draws from this credit first, then from optional usage credits at API rates. See [Anthropic's announcement](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for details and credit amounts by plan.
@@ -130,7 +129,7 @@ Use `/compose` to batch multiple messages into a single Claude prompt. Useful fo
 - Streams response back via `sendMessageDraft` (~300ms interval), falling back to progressive message editing if drafts aren't supported
 - Long responses auto-split into multiple messages (4000 char limit)
 - Follow-up messages continue the same Claude session via `-r <session-id>`
-- Voice notes are transcribed via Groq Whisper (`whisper-large-v3-turbo`), files >20MB are chunked with ffmpeg
+- Voice notes are transcribed via Groq Whisper (`whisper-large-v3-turbo`)
 - One active process per user; messages sent while busy are queued automatically
 - When Claude writes a plan file and calls `ExitPlanMode`, the bot intercepts it, displays the plan as plain text, and offers action buttons: execute in a new session, execute keeping context, or modify with feedback
 - Use `/stop` to cancel the current process and clear the queue
