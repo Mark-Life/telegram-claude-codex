@@ -7,15 +7,29 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import { Bot, type Context, InlineKeyboard, Keyboard } from "grammy";
-import { hasActiveProcess, runClaude, stopClaude } from "./claude";
+import {
+  clearSessionCache,
+  getCapabilities,
+  getSessionProject,
+  hasActiveProcess,
+  listAllSessions,
+  runAgent,
+  stopAgent,
+} from "./agent";
+import { listProviders } from "./agent/registry";
+import type { ProviderId } from "./agent/types";
 import {
   getCurrentBranch,
   getGitHubUrl,
   listBranches,
   listOpenPRs,
 } from "./git";
-import { clearSessionCache, getSessionProject, listAllSessions } from "./history";
-import { loadPersistedState, setActiveProject, updateSession } from "./state";
+import {
+  loadPersistedState,
+  setActiveProject,
+  setActiveProvider,
+  updateSession,
+} from "./state";
 import { splitText, streamToTelegram } from "./telegram";
 import { transcribeAudio } from "./transcribe";
 
@@ -37,12 +51,13 @@ interface PendingPlan {
 
 interface UserState {
   activeProject: string;
+  activeProvider: ProviderId;
   composeMessages?: ComposeMessage[];
   composeStatusMessageId?: number;
   pendingPlan?: PendingPlan;
   queue: QueuedMessage[];
   queueStatusMessageId?: number;
-  sessions: Map<string, string>;
+  sessions: Record<ProviderId, Map<string, string>>;
 }
 
 const userStates = new Map<number, UserState>();
@@ -113,13 +128,32 @@ function getState(id: number): UserState {
   if (!state) {
     const persisted = loadPersistedState();
     state = {
+      activeProvider: persisted?.activeProvider ?? "claude",
       activeProject: persisted?.activeProject ?? "",
-      sessions: persisted?.sessions ?? new Map(),
+      sessions: persisted?.sessions ?? { claude: new Map(), codex: new Map() },
       queue: [],
     };
     userStates.set(id, state);
   }
   return state;
+}
+
+/** Resolve the active provider's display name (falls back to its id) */
+function activeProviderName(state: UserState) {
+  return (
+    listProviders().find((p) => p.id === state.activeProvider)?.displayName ??
+    state.activeProvider
+  );
+}
+
+/** Whether the active provider supports plan mode (gates all plan UI/affordances) */
+function planModeEnabled(state: UserState) {
+  return getCapabilities(state.activeProvider).planMode;
+}
+
+/** Active pending plan, or undefined when the active provider lacks plan mode */
+function activePendingPlan(state: UserState) {
+  return planModeEnabled(state) ? state.pendingPlan : undefined;
 }
 
 /** List project directories */
@@ -147,7 +181,9 @@ export function cleanupStaleState() {
       state.composeStatusMessageId = undefined;
     }
   }
-  clearSessionCache();
+  for (const provider of listProviders()) {
+    clearSessionCache(provider.id);
+  }
   const mem = process.memoryUsage();
   console.log(
     `[cleanup] rss=${(mem.rss / 1024 / 1024).toFixed(1)}MB heap=${(mem.heapUsed / 1024 / 1024).toFixed(1)}MB`
@@ -217,8 +253,46 @@ export function createBot(
     const state = getState(getUserId(ctx));
     const project = state.activeProject || "(none)";
     await ctx.reply(
-      `Claude Code bot ready.\nActive project: ${project}\n\nCommands:\n/projects - switch project\n/history - resume a past session\n/stop - kill active process\n/status - current state\n/new - reset session`,
+      `Coding agent bot ready.\nProvider: ${activeProviderName(state)}\nActive project: ${project}\n\nCommands:\n/projects - switch project\n/provider - switch coding agent provider\n/history - resume a past session\n/stop - kill active process\n/status - current state\n/new - reset session`,
       { reply_markup: mainKeyboard }
+    );
+  });
+
+  bot.command("provider", async (ctx) => {
+    const state = getState(getUserId(ctx));
+    const keyboard = new InlineKeyboard();
+    for (const provider of listProviders()) {
+      const mark = provider.id === state.activeProvider ? "✓ " : "";
+      keyboard
+        .text(`${mark}${provider.displayName}`, `provider:${provider.id}`)
+        .row();
+    }
+    await ctx.reply("Select a coding agent provider:", {
+      reply_markup: keyboard,
+    });
+  });
+
+  bot.callbackQuery(/^provider:(.+)$/, async (ctx) => {
+    const chosen = ctx.match?.[1] as ProviderId;
+    const provider = listProviders().find((p) => p.id === chosen);
+    if (!provider) {
+      await ctx.answerCallbackQuery({ text: "Unknown provider" });
+      return;
+    }
+    const userId = ctx.from.id;
+    const state = getState(userId);
+    const wasRunning = hasActiveProcess(userId);
+    if (wasRunning) {
+      stopAgent(userId);
+    }
+    // setActiveProvider mutates state.activeProvider in place and persists
+    setActiveProvider(state, chosen);
+    await ctx.answerCallbackQuery({
+      text: `Switched to ${provider.displayName}`,
+    });
+    const stoppedSuffix = wasRunning ? " Previous run was stopped." : "";
+    await ctx.editMessageText(
+      `Active provider: ${provider.displayName}.${stoppedSuffix}`
     );
   });
 
@@ -269,8 +343,9 @@ export function createBot(
       : escapeHtml(displayName);
     const branch = isGeneral ? null : getCurrentBranch(fullPath);
     const branchSuffix = branch ? ` [${escapeHtml(branch)}]` : "";
+    const providerSuffix = ` · ${escapeHtml(activeProviderName(state))}`;
     const msg = await ctx.editMessageText(
-      `Active project: ${projectLabel}${branchSuffix}`,
+      `Active project: ${projectLabel}${branchSuffix}${providerSuffix}`,
       { parse_mode: "HTML" }
     );
     await ctx.api.unpinAllChatMessages(chatId).catch(() => {});
@@ -288,7 +363,7 @@ export function createBot(
   bot.command("stop", async (ctx) => {
     const userId = getUserId(ctx);
     const state = getState(userId);
-    const stopped = stopClaude(userId);
+    const stopped = stopAgent(userId);
     const hadQueue = state.queue.length > 0;
     state.queue = [];
     state.pendingPlan = undefined;
@@ -309,7 +384,7 @@ export function createBot(
         : basename(state.activeProject)
       : "(none)";
     const running = hasActiveProcess(getUserId(ctx)) ? "Yes" : "No";
-    const sessionCount = state.sessions.size;
+    const sessionCount = state.sessions[state.activeProvider].size;
     const branch =
       state.activeProject && state.activeProject !== projectsDir
         ? getCurrentBranch(state.activeProject)
@@ -322,7 +397,7 @@ export function createBot(
       : "";
 
     await ctx.reply(
-      `Project: ${project}\nRunning: ${running}\nSessions: ${sessionCount}${branchLine}${queueLine}${composeLine}`,
+      `Provider: ${activeProviderName(state)}\nProject: ${project}\nRunning: ${running}\nSessions: ${sessionCount}${branchLine}${queueLine}${composeLine}`,
       { reply_markup: mainKeyboard }
     );
   });
@@ -332,6 +407,7 @@ export function createBot(
       [
         "<b>Commands:</b>",
         "/projects — switch active project",
+        "/provider — switch coding agent provider",
         "/history — resume a past session",
         "/new — start fresh conversation",
         "/stop — kill active process",
@@ -343,7 +419,7 @@ export function createBot(
         "/cancel — cancel compose mode",
         "/help — show this message",
         "",
-        "Send any text or voice message to chat with Claude in the active project.",
+        "Send any text or voice message to chat with the active coding agent in the active project.",
       ].join("\n"),
       { parse_mode: "HTML", reply_markup: mainKeyboard }
     );
@@ -428,7 +504,7 @@ export function createBot(
     if (!state.activeProject) {
       setActiveProject(state, projectsDir);
     }
-    updateSession(state, state.activeProject);
+    updateSession(state, state.activeProvider, state.activeProject);
     state.queue = [];
     state.pendingPlan = undefined;
     state.composeMessages = undefined;
@@ -459,7 +535,7 @@ export function createBot(
     state.composeStatusMessageId = msg.message_id;
   });
 
-  /** Execute send: combine composed messages and send to Claude */
+  /** Execute send: combine composed messages and send to the active provider */
   async function executeSend(ctx: Context, state: UserState) {
     if (!state.composeMessages) {
       await ctx.reply("Not in compose mode.", { reply_markup: mainKeyboard });
@@ -520,8 +596,8 @@ export function createBot(
   });
 
   /** Build paginated history message with inline keyboard */
-  function buildHistoryMessage(page: number) {
-    const sessions = listAllSessions();
+  function buildHistoryMessage(page: number, providerId: ProviderId) {
+    const sessions = listAllSessions(providerId);
 
     if (sessions.length === 0) {
       return null;
@@ -566,7 +642,8 @@ export function createBot(
   }
 
   bot.command("history", async (ctx) => {
-    const result = buildHistoryMessage(0);
+    const state = getState(getUserId(ctx));
+    const result = buildHistoryMessage(0, state.activeProvider);
 
     if (!result) {
       await ctx.reply("No session history found.", {
@@ -583,7 +660,8 @@ export function createBot(
 
   bot.callbackQuery(/^history:(\d+)$/, async (ctx) => {
     const page = Number.parseInt(ctx.match?.[1], 10);
-    const result = buildHistoryMessage(page);
+    const state = getState(ctx.from.id);
+    const result = buildHistoryMessage(page, state.activeProvider);
 
     if (!result) {
       await ctx.answerCallbackQuery({ text: "No sessions found" });
@@ -601,7 +679,7 @@ export function createBot(
     const sessionId = ctx.match?.[1];
     const state = getState(ctx.from.id);
 
-    const cachedProject = getSessionProject(sessionId);
+    const cachedProject = getSessionProject(state.activeProvider, sessionId);
     if (cachedProject) {
       setActiveProject(state, cachedProject);
     }
@@ -611,7 +689,7 @@ export function createBot(
       return;
     }
 
-    updateSession(state, state.activeProject, sessionId);
+    updateSession(state, state.activeProvider, state.activeProject, sessionId);
     const chatId = ctx.chat!.id;
     const projectName = basename(state.activeProject);
     await ctx.answerCallbackQuery({ text: "Session resumed" });
@@ -633,7 +711,7 @@ export function createBot(
 
   bot.callbackQuery(/^force_send:(\d+)$/, async (ctx) => {
     const userId = ctx.from.id;
-    const stopped = stopClaude(userId);
+    const stopped = stopAgent(userId);
     await ctx.answerCallbackQuery({
       text: stopped ? "Stopping current task..." : "No active process",
     });
@@ -697,7 +775,7 @@ export function createBot(
   bot.callbackQuery(/^plan_new:(\d+)$/, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
-    const plan = state.pendingPlan;
+    const plan = activePendingPlan(state);
     if (!plan) {
       await ctx.answerCallbackQuery({ text: "No pending plan" });
       return;
@@ -713,7 +791,7 @@ export function createBot(
     }
 
     setActiveProject(state, plan.projectPath);
-    updateSession(state, plan.projectPath);
+    updateSession(state, state.activeProvider, plan.projectPath);
     state.pendingPlan = undefined;
     await ctx.answerCallbackQuery({ text: "Executing plan (new session)..." });
     await ctx.editMessageText("Executing plan (new session)...");
@@ -727,7 +805,7 @@ export function createBot(
   bot.callbackQuery(/^plan_resume:(\d+)$/, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
-    const plan = state.pendingPlan;
+    const plan = activePendingPlan(state);
     if (!plan) {
       await ctx.answerCallbackQuery({ text: "No pending plan" });
       return;
@@ -735,7 +813,12 @@ export function createBot(
 
     setActiveProject(state, plan.projectPath);
     if (plan.sessionId) {
-      updateSession(state, plan.projectPath, plan.sessionId);
+      updateSession(
+        state,
+        state.activeProvider,
+        plan.projectPath,
+        plan.sessionId
+      );
     }
     state.pendingPlan = undefined;
     await ctx.answerCallbackQuery({
@@ -753,7 +836,7 @@ export function createBot(
   bot.callbackQuery(/^plan_modify:(\d+)$/, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
-    if (!state.pendingPlan) {
+    if (!activePendingPlan(state)) {
       await ctx.answerCallbackQuery({ text: "No pending plan" });
       return;
     }
@@ -771,7 +854,7 @@ export function createBot(
   bot.callbackQuery(/^plan_cancel:(\d+)$/, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
-    if (!state.pendingPlan) {
+    if (!activePendingPlan(state)) {
       await ctx.answerCallbackQuery({ text: "No pending plan" });
       return;
     }
@@ -787,7 +870,7 @@ export function createBot(
     });
   });
 
-  /** Send a prompt to Claude and stream the response */
+  /** Send a prompt to the active provider and stream the response */
   async function handlePrompt(ctx: Context, prompt: string) {
     const userId = getUserId(ctx);
     const state = getState(userId);
@@ -799,11 +882,17 @@ export function createBot(
       });
     }
 
-    if (state.pendingPlan) {
-      const plan = state.pendingPlan;
+    const pendingPlan = activePendingPlan(state);
+    if (pendingPlan) {
+      const plan = pendingPlan;
       setActiveProject(state, plan.projectPath);
       if (plan.sessionId) {
-        updateSession(state, plan.projectPath, plan.sessionId);
+        updateSession(
+          state,
+          state.activeProvider,
+          plan.projectPath,
+          plan.sessionId
+        );
       }
       state.pendingPlan = undefined;
       const feedbackPrompt = `Plan feedback from user: ${prompt}\n\nRevise the plan based on this feedback. Do not execute yet — present the updated plan.`;
@@ -820,7 +909,7 @@ export function createBot(
     await runAndDrain(ctx, prompt, state, userId);
   }
 
-  /** Run a Claude prompt and drain any queued messages afterward */
+  /** Run an agent prompt and drain any queued messages afterward */
   async function runAndDrain(
     ctx: Context,
     prompt: string,
@@ -830,7 +919,9 @@ export function createBot(
     let currentCtx = ctx;
     let currentPrompt = prompt;
     while (true) {
-      const sessionId = state.sessions.get(state.activeProject);
+      const sessionId = state.sessions[state.activeProvider].get(
+        state.activeProject
+      );
       const projectName =
         state.activeProject === projectsDir
           ? "general"
@@ -840,21 +931,30 @@ export function createBot(
           ? getCurrentBranch(state.activeProject)
           : null;
       try {
-        const events = runClaude(
+        const events = runAgent(state.activeProvider, {
           userId,
-          currentPrompt,
-          state.activeProject,
-          currentCtx.chat!.id,
-          sessionId
-        );
-        const result = await streamToTelegram(currentCtx, events, projectName, {
-          branchName,
+          prompt: currentPrompt,
+          projectDir: state.activeProject,
+          chatId: currentCtx.chat!.id,
+          sessionId,
         });
+        const result = await streamToTelegram(
+          currentCtx,
+          events,
+          projectName,
+          getCapabilities(state.activeProvider),
+          { branchName }
+        );
         if (result.sessionId) {
-          updateSession(state, state.activeProject, result.sessionId);
+          updateSession(
+            state,
+            state.activeProvider,
+            state.activeProject,
+            result.sessionId
+          );
         }
-        if (result.planPath) {
-          stopClaude(userId);
+        if (result.planPath && getCapabilities(state.activeProvider).planMode) {
+          stopAgent(userId);
           await presentPlan(currentCtx, userId, state, result);
           return;
         }
@@ -1126,7 +1226,9 @@ export function createBot(
   async function flushMediaGroup(groupId: string) {
     const group = mediaGroupBuffers.get(groupId);
     mediaGroupBuffers.delete(groupId);
-    if (!group) return;
+    if (!group) {
+      return;
+    }
 
     const { ctx, photos, caption } = group;
     const state = getState(getUserId(ctx));
@@ -1142,7 +1244,10 @@ export function createBot(
 
       if (state.composeMessages) {
         for (const part of photoParts) {
-          state.composeMessages.push({ type: "photo", content: `${part}\n${caption}`.trim() });
+          state.composeMessages.push({
+            type: "photo",
+            content: `${part}\n${caption}`.trim(),
+          });
         }
         await updateComposeStatus(ctx, state);
       } else {
@@ -1173,9 +1278,15 @@ export function createBot(
         if (ctx.message.caption) {
           existing.caption = ctx.message.caption;
         }
-        existing.timer = setTimeout(() => flushMediaGroup(mediaGroupId), MEDIA_GROUP_DEBOUNCE_MS);
+        existing.timer = setTimeout(
+          () => flushMediaGroup(mediaGroupId),
+          MEDIA_GROUP_DEBOUNCE_MS
+        );
       } else {
-        const timer = setTimeout(() => flushMediaGroup(mediaGroupId), MEDIA_GROUP_DEBOUNCE_MS);
+        const timer = setTimeout(
+          () => flushMediaGroup(mediaGroupId),
+          MEDIA_GROUP_DEBOUNCE_MS
+        );
         mediaGroupBuffers.set(mediaGroupId, {
           photos: [{ fileId: largest.file_id, filename }],
           caption: ctx.message.caption ?? "",

@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"019e4b7b-a7a7-7932-b0f1-29f849bf255b"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I can’t create `readonly-test.txt` because the current workspace is mounted read-only, and approvals are disabled for this session."}}
+{"type":"turn.completed","usage":{"input_tokens":13417,"cached_input_tokens":11648,"output_tokens":87,"reasoning_output_tokens":55}}

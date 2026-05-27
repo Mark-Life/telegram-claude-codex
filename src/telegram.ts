@@ -1,6 +1,6 @@
 import type { Context } from "grammy";
 import { Marked } from "marked";
-import type { ClaudeEvent } from "./claude";
+import type { AgentEvent, ProviderCapabilities } from "./agent/types";
 
 const MAX_MSG_LENGTH = 4000;
 const EDIT_INTERVAL_MS = 1500;
@@ -229,11 +229,12 @@ interface StreamOptions {
 
 type MessageMode = "text" | "tools" | "thinking" | "none";
 
-/** Stream Claude events into separate Telegram messages by type */
+/** Stream agent events into separate Telegram messages by type, gated by the active provider's capabilities */
 export async function streamToTelegram(
   ctx: Context,
-  events: AsyncGenerator<ClaudeEvent>,
+  events: AsyncGenerator<AgentEvent>,
   projectName: string,
+  capabilities: ProviderCapabilities,
   options?: StreamOptions
 ): Promise<StreamResult> {
   const chatId = ctx.chat!.id;
@@ -456,6 +457,9 @@ export async function streamToTelegram(
         toolLines.push(label);
         await flushTools().catch(() => {});
       } else if (event.kind === "thinking_start") {
+        if (!capabilities.thinking) {
+          continue;
+        }
         mode = await switchMode("thinking");
         if (useDrafts) {
           await safeSendDraft(
@@ -469,6 +473,9 @@ export async function streamToTelegram(
           await sendNew("<i>Thinking...</i>", "HTML");
         }
       } else if (event.kind === "thinking_delta") {
+        if (!capabilities.thinking) {
+          continue;
+        }
         if (mode !== "thinking") {
           mode = await switchMode("thinking");
           if (useDrafts) {
@@ -486,6 +493,9 @@ export async function streamToTelegram(
         thinkingText += event.text;
         await flushThinking().catch(() => {});
       } else if (event.kind === "thinking_done") {
+        if (!capabilities.thinking) {
+          continue;
+        }
         if (mode === "thinking" && thinkingText) {
           if (useDrafts) {
             const { html, plainText } = renderThinkingHtml(thinkingText);
@@ -497,6 +507,9 @@ export async function streamToTelegram(
         thinkingText = "";
         mode = "none";
       } else if (event.kind === "agent_started") {
+        if (!capabilities.subagents) {
+          continue;
+        }
         if (mode !== "tools") {
           mode = await switchMode("tools");
           await sendNew("...");
@@ -504,6 +517,9 @@ export async function streamToTelegram(
         toolLines.push(`\u23F3 Agent: ${event.description}`);
         await flushTools().catch(() => {});
       } else if (event.kind === "agent_done") {
+        if (!capabilities.subagents) {
+          continue;
+        }
         const icon = event.status === "completed" ? "\u2705" : "\u274C";
         let line = `${icon} Agent: ${event.description}`;
         const parts: string[] = [];
@@ -561,7 +577,7 @@ export async function streamToTelegram(
     lastTextMessageId = messageId;
   }
 
-  const footer = formatFooter(projectName, result, branchName);
+  const footer = formatFooter(projectName, result, capabilities, branchName);
 
   if (accumulated && (useDrafts || lastTextMessageId)) {
     const html = markdownToTelegramHtml(accumulated);
@@ -599,10 +615,11 @@ export async function streamToTelegram(
   return result;
 }
 
-/** Format metadata footer as HTML */
+/** Format metadata footer as HTML, gating cost/turns by provider capabilities */
 function formatFooter(
   projectName: string,
   result: StreamResult,
+  capabilities: ProviderCapabilities,
   branchName?: string | null
 ) {
   const meta: string[] = [];
@@ -611,14 +628,18 @@ function formatFooter(
       `Project: ${branchName ? `${escapeHtml(projectName)} [${escapeHtml(branchName)}]` : escapeHtml(projectName)}`
     );
   }
-  if (result.cost !== undefined) {
+  if (capabilities.cost && result.cost !== undefined) {
     meta.push(`Cost: $${result.cost.toFixed(4)}`);
   }
   if (result.durationMs !== undefined) {
     const secs = (result.durationMs / 1000).toFixed(1);
     meta.push(`Time: ${secs}s`);
   }
-  if (result.turns !== undefined && result.turns > 1) {
+  const turnsMeaningful =
+    result.turns !== undefined &&
+    result.turns > 1 &&
+    (capabilities.cost || result.turns > 0);
+  if (turnsMeaningful) {
     meta.push(`Turns: ${result.turns}`);
   }
   return meta.length > 0 ? `<i>${meta.join(" | ")}</i>` : "";
