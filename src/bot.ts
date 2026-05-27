@@ -62,6 +62,7 @@ interface UserState {
 
 const userStates = new Map<number, UserState>();
 const HISTORY_PAGE_SIZE = 5;
+const PROJECT_PAGE_SIZE = 5;
 const MAX_COMPOSE_MESSAGES = 50;
 const MEDIA_GROUP_DEBOUNCE_MS = 500;
 
@@ -296,21 +297,70 @@ export function createBot(
     );
   });
 
-  bot.command("projects", async (ctx) => {
+  /** Build paginated project selection message with inline keyboard */
+  function buildProjectsMessage(page: number, projectsDir: string) {
     const projects = listProjects(projectsDir);
+
     if (projects.length === 0) {
+      return null;
+    }
+
+    const totalPages = Math.ceil(projects.length / PROJECT_PAGE_SIZE);
+    const safePage = Math.max(0, Math.min(page, totalPages - 1));
+    const pageSlice = projects.slice(
+      safePage * PROJECT_PAGE_SIZE,
+      (safePage + 1) * PROJECT_PAGE_SIZE
+    );
+
+    const keyboard = new InlineKeyboard();
+    keyboard.text("General (all projects)", "project:__general__").row();
+    for (const name of pageSlice) {
+      keyboard.text(name, `project:${name}`).row();
+    }
+
+    const navRow: { text: string; data: string }[] = [];
+    if (safePage > 0) {
+      navRow.push({ text: "<< Prev", data: `projects:${safePage - 1}` });
+    }
+    if (safePage < totalPages - 1) {
+      navRow.push({ text: "Next >>", data: `projects:${safePage + 1}` });
+    }
+    if (navRow.length > 0) {
+      for (const btn of navRow) {
+        keyboard.text(btn.text, btn.data);
+      }
+      keyboard.row();
+    }
+
+    const pageIndicator =
+      totalPages > 1 ? ` (${safePage + 1}/${totalPages})` : "";
+    return { text: `Select a project${pageIndicator}:`, keyboard };
+  }
+
+  bot.command("projects", async (ctx) => {
+    const result = buildProjectsMessage(0, projectsDir);
+
+    if (!result) {
       await ctx.reply(`No projects found in ${projectsDir}`, {
         reply_markup: mainKeyboard,
       });
       return;
     }
 
-    const keyboard = new InlineKeyboard();
-    keyboard.text("General (all projects)", "project:__general__").row();
-    for (const name of projects) {
-      keyboard.text(name, `project:${name}`).row();
+    await ctx.reply(result.text, { reply_markup: result.keyboard });
+  });
+
+  bot.callbackQuery(/^projects:(\d+)$/, async (ctx) => {
+    const page = Number.parseInt(ctx.match?.[1], 10);
+    const result = buildProjectsMessage(page, projectsDir);
+
+    if (!result) {
+      await ctx.answerCallbackQuery({ text: "No projects found" });
+      return;
     }
-    await ctx.reply("Select a project:", { reply_markup: keyboard });
+
+    await ctx.editMessageText(result.text, { reply_markup: result.keyboard });
+    await ctx.answerCallbackQuery();
   });
 
   bot.callbackQuery(/^project:(.+)$/, async (ctx) => {
