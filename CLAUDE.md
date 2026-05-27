@@ -22,7 +22,7 @@ Telegram bot that bridges coding-agent CLIs (Claude Code + OpenAI Codex) with Te
 - **bot.ts** — Grammy bot setup, command handlers (`/projects`, `/provider`, `/stop`, `/status`, `/new`, …), message routing, capability gating. Maintains per-user state: `activeProject` path, `activeProvider`, and per-provider `sessions` maps.
 - **state.ts** — Persisted bot state (`.data/state.json`). Holds `activeProject`, `activeProvider`, and provider-namespaced `sessions`. One-time migration of the old flat-session shape → `{activeProvider:"claude", sessions:{claude:<old>, codex:{}}}`.
 - **telegram.ts** — Consumes the normalized `AgentEvent` stream via `sendMessageDraft` (300ms interval) with fallback to progressive `editMessageText`. Auto-splits at 4000 chars. Converts Markdown → Telegram HTML. Falls back to plain text on parse failure. Footer/thinking/subagent/plan UI gated on the active provider's capabilities.
-- **transcribe.ts** — Voice message transcription via Groq Whisper (`whisper-large-v3-turbo`). Files >20MB chunked with ffmpeg.
+- **transcribe.ts** — Voice message transcription via Groq Whisper (`whisper-large-v3-turbo`).
 
 #### agent/ — provider abstraction layer
 

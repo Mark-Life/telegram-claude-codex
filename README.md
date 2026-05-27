@@ -26,7 +26,6 @@ Telegram bot interface for coding agents (Claude Code + OpenAI Codex) on a VPS. 
 - [Bun](https://bun.sh/) runtime
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated (`claude login`)
 - [Codex](https://developers.openai.com/codex/cli) CLI installed and authenticated (`codex login`) — optional, only if you want the Codex provider
-- [ffmpeg](https://ffmpeg.org/) — required for voice messages >20MB (chunked transcription)
 - [Groq](https://console.groq.com/) API key — for voice message transcription
 
 Agent auth is CLI-managed: log into each CLI once on the host. The bot handles **no** OpenAI/Anthropic API keys — there is no API-key env var for either provider.
@@ -155,7 +154,7 @@ Use `/compose` to batch multiple messages into a single prompt. Useful for forwa
 - Long responses auto-split into multiple messages (4000 char limit)
 - Follow-up messages continue the same session for the active provider (Claude `-r <id>`, Codex `exec resume <id>`); sessions are tracked per provider
 - UI features adapt to provider capabilities — Codex omits cost/turns (duration only) and subagent messages; both stream thinking
-- Voice notes are transcribed via Groq Whisper (`whisper-large-v3-turbo`), files >20MB are chunked with ffmpeg
+- Voice notes are transcribed via Groq Whisper (`whisper-large-v3-turbo`)
 - One active process per user (across providers); messages sent while busy are queued automatically
 - Plan mode is organic for both providers: Claude writes to `.claude/plans/` and calls `ExitPlanMode`; Codex follows the `.codex/plans/PLAN.md` convention it's taught via an injected prompt prefix. Either triggers the same interception — the bot displays the plan as plain text and offers action buttons: execute in a new session, execute keeping context, or modify with feedback
 - Use `/stop` to cancel the current process and clear the queue
