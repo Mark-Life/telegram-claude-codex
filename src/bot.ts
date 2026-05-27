@@ -62,7 +62,7 @@ interface UserState {
 
 const userStates = new Map<number, UserState>();
 const HISTORY_PAGE_SIZE = 5;
-const PROJECT_PAGE_SIZE = 5;
+const PROJECT_PAGE_SIZE = 20;
 const MAX_COMPOSE_MESSAGES = 50;
 const MEDIA_GROUP_DEBOUNCE_MS = 500;
 
