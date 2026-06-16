@@ -30,7 +30,7 @@ import {
   setActiveProvider,
   updateSession,
 } from "./state";
-import { splitText, streamToTelegram } from "./telegram";
+import { sendRichMarkdown, splitText, streamToTelegram } from "./telegram";
 import { transcribeAudio } from "./transcribe";
 
 interface QueuedMessage {
@@ -805,7 +805,7 @@ export function createBot(
 
     const chunks = splitText(planContent);
     for (const chunk of chunks) {
-      await ctx.api.sendMessage(ctx.chat!.id, chunk);
+      await sendRichMarkdown(ctx, ctx.chat!.id, chunk);
     }
 
     const keyboard = new InlineKeyboard()

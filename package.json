@@ -13,8 +13,7 @@
   "dependencies": {
     "execa": "^9.6.1",
     "grammy": "^1.44.0",
-    "groq-sdk": "^0.37.0",
-    "marked": "^17.0.2"
+    "groq-sdk": "^0.37.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.0",
