@@ -214,6 +214,36 @@ async function safeSendMessage(
   }
 }
 
+/** Stream a partial rich message (raw markdown). Swallows transient draft errors. */
+async function safeSendRichDraft(
+  ctx: Context,
+  chatId: number,
+  draftId: number,
+  markdown: string
+) {
+  try {
+    await ctx.api.sendRichMessageDraft(chatId, draftId, {
+      markdown: markdown || "...",
+    });
+  } catch {
+    // drafts are ephemeral; dropped updates are harmless
+  }
+}
+
+/** Persist a rich message from raw markdown. Falls back to plain text on failure. */
+async function safeSendRichMessage(
+  ctx: Context,
+  chatId: number,
+  markdown: string
+) {
+  const display = markdown || "...";
+  try {
+    return await ctx.api.sendRichMessage(chatId, { markdown: display });
+  } catch {
+    return await ctx.api.sendMessage(chatId, display);
+  }
+}
+
 interface StreamResult {
   cost?: number;
   durationMs?: number;
@@ -249,6 +279,7 @@ export async function streamToTelegram(
   let toolLines: string[] = [];
   let thinkingText = "";
   let lastTextMessageId = 0;
+  let useRich: boolean | null = null;
   let useDrafts: boolean | null = null;
   const draftId = chatId;
 
@@ -265,13 +296,46 @@ export async function streamToTelegram(
     return sent;
   };
 
+  /** Ensure a text channel exists, probing rich messages first, then drafts, then edits */
+  const ensureTextChannel = async () => {
+    if (useRich === null && useDrafts === null) {
+      try {
+        await ctx.api.sendRichMessageDraft(chatId, draftId, {
+          markdown: "...",
+        });
+        useRich = true;
+        useDrafts = false;
+        return;
+      } catch {
+        useRich = false;
+      }
+      try {
+        await ctx.api.sendMessageDraft(chatId, draftId, "...", {
+          parse_mode: "HTML",
+        });
+        useDrafts = true;
+      } catch {
+        useDrafts = false;
+        await sendNew("...");
+      }
+      return;
+    }
+    if (useRich) {
+      return;
+    }
+    if (!useDrafts) {
+      await sendNew("...");
+    }
+  };
+
   /** Finalize the current text message (split-safe edit) */
   const flushText = async (final = false) => {
     if (!accumulated) {
       return;
     }
 
-    const interval = useDrafts ? DRAFT_INTERVAL_MS : EDIT_INTERVAL_MS;
+    const interval =
+      useRich || useDrafts ? DRAFT_INTERVAL_MS : EDIT_INTERVAL_MS;
     const now = Date.now();
     if (!final && now - lastEditTime < interval) {
       pendingEdit = true;
@@ -279,6 +343,19 @@ export async function streamToTelegram(
     }
     pendingEdit = false;
     lastEditTime = now;
+
+    if (useRich) {
+      if (accumulated.length > MAX_MSG_LENGTH) {
+        const cutPoint = accumulated.lastIndexOf("\n", MAX_MSG_LENGTH);
+        const splitAt =
+          cutPoint > MAX_MSG_LENGTH * 0.5 ? cutPoint : MAX_MSG_LENGTH;
+        const chunk = accumulated.slice(0, splitAt);
+        accumulated = accumulated.slice(splitAt);
+        await safeSendRichMessage(ctx, chatId, chunk);
+      }
+      await safeSendRichDraft(ctx, chatId, draftId, accumulated);
+      return;
+    }
 
     let text = accumulated;
     if (text.length > MAX_MSG_LENGTH) {
@@ -380,7 +457,10 @@ export async function streamToTelegram(
   /** Switch to a new mode, finalizing the previous one */
   const switchMode = async (newMode: MessageMode) => {
     if (mode === "text" && accumulated) {
-      if (useDrafts) {
+      if (useRich) {
+        const sent = await safeSendRichMessage(ctx, chatId, accumulated);
+        lastTextMessageId = sent?.message_id ?? 0;
+      } else if (useDrafts) {
         const sent = await safeSendMessage(
           ctx,
           chatId,
@@ -430,19 +510,7 @@ export async function streamToTelegram(
       if (event.kind === "text_delta") {
         if (mode !== "text") {
           mode = await switchMode("text");
-          if (useDrafts === null) {
-            try {
-              await ctx.api.sendMessageDraft(chatId, draftId, "...", {
-                parse_mode: "HTML",
-              });
-              useDrafts = true;
-            } catch {
-              useDrafts = false;
-              await sendNew("...");
-            }
-          } else if (!useDrafts) {
-            await sendNew("...");
-          }
+          await ensureTextChannel();
         }
         accumulated += event.text;
         await flushText().catch(() => {});
@@ -551,18 +619,14 @@ export async function streamToTelegram(
         if (!accumulated && event.text) {
           if (mode !== "text") {
             mode = await switchMode("text");
-            if (!useDrafts) {
-              await sendNew("...");
-            }
+            await ensureTextChannel();
           }
           accumulated = event.text;
         }
       } else if (event.kind === "error") {
         if (mode !== "text") {
           mode = await switchMode("text");
-          if (!useDrafts) {
-            await sendNew("...");
-          }
+          await ensureTextChannel();
         }
         accumulated += `\n\n[Error: ${event.message}]`;
       }
@@ -573,13 +637,24 @@ export async function streamToTelegram(
   }
 
   // Final edit on the last text message with footer
-  if (mode === "text" && accumulated && !useDrafts) {
+  if (mode === "text" && accumulated && !(useRich || useDrafts)) {
     lastTextMessageId = messageId;
   }
 
   const footer = formatFooter(projectName, result, capabilities, branchName);
 
-  if (accumulated && (useDrafts || lastTextMessageId)) {
+  if (useRich && accumulated) {
+    const footerMd = formatFooter(
+      projectName,
+      result,
+      capabilities,
+      branchName,
+      true
+    );
+    const display = footerMd ? `${accumulated}\n\n${footerMd}` : accumulated;
+    const sent = await safeSendRichMessage(ctx, chatId, display);
+    lastTextMessageId = sent?.message_id ?? 0;
+  } else if (accumulated && (useDrafts || lastTextMessageId)) {
     const html = markdownToTelegramHtml(accumulated);
     const display = footer ? `${html}\n\n${footer}` : html;
 
@@ -620,12 +695,14 @@ function formatFooter(
   projectName: string,
   result: StreamResult,
   capabilities: ProviderCapabilities,
-  branchName?: string | null
+  branchName?: string | null,
+  markdown = false
 ) {
+  const esc = markdown ? (s: string) => s : escapeHtml;
   const meta: string[] = [];
   if (projectName) {
     meta.push(
-      `Project: ${branchName ? `${escapeHtml(projectName)} [${escapeHtml(branchName)}]` : escapeHtml(projectName)}`
+      `Project: ${branchName ? `${esc(projectName)} [${esc(branchName)}]` : esc(projectName)}`
     );
   }
   if (capabilities.cost && result.cost !== undefined) {
@@ -642,5 +719,8 @@ function formatFooter(
   if (turnsMeaningful) {
     meta.push(`Turns: ${result.turns}`);
   }
-  return meta.length > 0 ? `<i>${meta.join(" | ")}</i>` : "";
+  if (meta.length === 0) {
+    return "";
+  }
+  return markdown ? `_${meta.join(" | ")}_` : `<i>${meta.join(" | ")}</i>`;
 }
