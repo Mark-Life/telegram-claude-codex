@@ -109,7 +109,14 @@ export async function streamToTelegram(
   let toolLines: string[] = [];
   let thinkingText = "";
   let lastTextMessageId = 0;
-  const draftId = chatId;
+  // Each streaming phase gets its own non-zero draft id so the client renders
+  // thinking/text/tools as separate previews instead of morphing one slot.
+  let draftSeq = 0;
+  let currentDraftId = 0;
+  const startDraft = () => {
+    draftSeq += 1;
+    currentDraftId = draftSeq;
+  };
 
   /** Render the current tool lines as Telegram HTML */
   const renderToolsHtml = () => {
@@ -154,7 +161,9 @@ export async function streamToTelegram(
       accumulated = accumulated.slice(splitAt);
       await safeSendRichMessage(ctx, chatId, { markdown: chunk });
     }
-    await safeSendRichDraft(ctx, chatId, draftId, { markdown: accumulated });
+    await safeSendRichDraft(ctx, chatId, currentDraftId, {
+      markdown: accumulated,
+    });
   };
 
   /** Stream the current tool lines as a draft */
@@ -162,7 +171,9 @@ export async function streamToTelegram(
     if (toolLines.length === 0) {
       return;
     }
-    await safeSendRichDraft(ctx, chatId, draftId, { html: renderToolsHtml() });
+    await safeSendRichDraft(ctx, chatId, currentDraftId, {
+      html: renderToolsHtml(),
+    });
   };
 
   /** Stream the accumulated thinking text as a draft */
@@ -177,7 +188,7 @@ export async function streamToTelegram(
     }
     pendingEdit = false;
     lastEditTime = now;
-    await safeSendRichDraft(ctx, chatId, draftId, {
+    await safeSendRichDraft(ctx, chatId, currentDraftId, {
       html: renderThinking(thinkingText).html,
     });
   };
@@ -228,12 +239,14 @@ export async function streamToTelegram(
       if (event.kind === "text_delta") {
         if (mode !== "text") {
           mode = await switchMode("text");
+          startDraft();
         }
         accumulated += event.text;
         await flushText().catch(() => {});
       } else if (event.kind === "tool_use") {
         if (mode !== "tools") {
           mode = await switchMode("tools");
+          startDraft();
         }
         const label = event.input
           ? `${event.name}: ${event.input}`
@@ -245,7 +258,8 @@ export async function streamToTelegram(
           continue;
         }
         mode = await switchMode("thinking");
-        await safeSendRichDraft(ctx, chatId, draftId, {
+        startDraft();
+        await safeSendRichDraft(ctx, chatId, currentDraftId, {
           html: "<i>Thinking...</i>",
         });
       } else if (event.kind === "thinking_delta") {
@@ -254,7 +268,8 @@ export async function streamToTelegram(
         }
         if (mode !== "thinking") {
           mode = await switchMode("thinking");
-          await safeSendRichDraft(ctx, chatId, draftId, {
+          startDraft();
+          await safeSendRichDraft(ctx, chatId, currentDraftId, {
             html: "<i>Thinking...</i>",
           });
         }
@@ -276,6 +291,7 @@ export async function streamToTelegram(
         }
         if (mode !== "tools") {
           mode = await switchMode("tools");
+          startDraft();
         }
         toolLines.push(`⏳ Agent: ${event.description}`);
         await flushTools().catch(() => {});
