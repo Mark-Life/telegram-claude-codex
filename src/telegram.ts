@@ -1,9 +1,10 @@
 import type { Context } from "grammy";
-import { Marked } from "marked";
 import type { AgentEvent, ProviderCapabilities } from "./agent/types";
 
 const MAX_MSG_LENGTH = 4000;
 const EDIT_INTERVAL_MS = 1500;
+const DRAFT_INTERVAL_MS = 300;
+const TYPING_INTERVAL_MS = 5000;
 
 /** Split text into chunks that fit within Telegram's message length limit, breaking at newline boundaries when possible */
 export function splitText(text: string, maxLen = MAX_MSG_LENGTH) {
@@ -24,9 +25,6 @@ export function splitText(text: string, maxLen = MAX_MSG_LENGTH) {
   return chunks;
 }
 
-const DRAFT_INTERVAL_MS = 300;
-const TYPING_INTERVAL_MS = 5000;
-
 /** Escape HTML special characters */
 function escapeHtml(text: string) {
   return text
@@ -35,183 +33,46 @@ function escapeHtml(text: string) {
     .replace(/>/g, "&gt;");
 }
 
-/** Marked instance with Telegram-compatible HTML renderer */
-const marked = new Marked({
-  gfm: true,
-  breaks: false,
-  renderer: {
-    code({ text, lang }) {
-      const escaped = escapeHtml(text);
-      return lang
-        ? `\n<pre><code class="language-${lang}">${escaped}</code></pre>\n`
-        : `\n<pre>${escaped}</pre>\n`;
-    },
-    blockquote({ tokens }) {
-      return `<blockquote>${this.parser.parse(tokens).trim()}</blockquote>\n`;
-    },
-    heading({ tokens }) {
-      return `<b>${this.parser.parseInline(tokens)}</b>\n`;
-    },
-    hr() {
-      return "\n";
-    },
-    list({ items, ordered }) {
-      return `${items
-        .map((item, i) => {
-          const bullet = ordered ? `${i + 1}. ` : "- ";
-          const content = this.parser.parse(item.tokens).trim();
-          return `${bullet}${content}`;
-        })
-        .join("\n")}\n`;
-    },
-    listitem(item) {
-      return this.parser.parse(item.tokens).trim();
-    },
-    paragraph({ tokens }) {
-      return `${this.parser.parseInline(tokens)}\n`;
-    },
-    table({ header, rows }) {
-      const headerText = header
-        .map((cell) => this.parser.parseInline(cell.tokens))
-        .join(" | ");
-      const rowTexts = rows.map((row) =>
-        row.map((cell) => this.parser.parseInline(cell.tokens)).join(" | ")
-      );
-      return `<pre>${escapeHtml(headerText)}\n${escapeHtml(rowTexts.join("\n"))}</pre>\n`;
-    },
-    tablerow({ text }) {
-      return text;
-    },
-    tablecell(token) {
-      return this.parser.parseInline(token.tokens);
-    },
-    strong({ tokens }) {
-      return `<b>${this.parser.parseInline(tokens)}</b>`;
-    },
-    em({ tokens }) {
-      return `<i>${this.parser.parseInline(tokens)}</i>`;
-    },
-    codespan({ text }) {
-      return `<code>${escapeHtml(text)}</code>`;
-    },
-    br() {
-      return "\n";
-    },
-    del({ tokens }) {
-      return `<s>${this.parser.parseInline(tokens)}</s>`;
-    },
-    link({ href, tokens }) {
-      return `<a href="${escapeHtml(href)}">${this.parser.parseInline(tokens)}</a>`;
-    },
-    image({ text }) {
-      return text;
-    },
-    space() {
-      return "";
-    },
-    html({ text }) {
-      return escapeHtml(text);
-    },
-    def() {
-      return "";
-    },
-    checkbox({ checked }) {
-      return checked ? "[x] " : "[ ] ";
-    },
-    text(token) {
-      if ("tokens" in token && token.tokens) {
-        return this.parser.parseInline(token.tokens);
-      }
-      return escapeHtml(token.text);
-    },
-  },
-});
+/** A rich message body: model text as raw markdown, or bot chrome as Telegram HTML */
+type RichInput = { markdown: string } | { html: string };
 
-/** Convert Markdown to Telegram-compatible HTML using a proper parser */
-function markdownToTelegramHtml(md: string) {
-  return (marked.parse(md) as string).trim();
-}
-
-/** Try editing with HTML, fall back to plain text. Returns true if HTML succeeded. */
-async function safeEditMessage(
-  ctx: Context,
-  chatId: number,
-  messageId: number,
-  text: string,
-  rawText?: string
-) {
-  const displayText = text || "...";
-  try {
-    await ctx.api.editMessageText(chatId, messageId, displayText, {
-      parse_mode: "HTML",
-    });
-    return true;
-  } catch (err: any) {
-    if (
-      err?.description?.includes("message is not modified") ||
-      err?.description?.includes("message can't be edited")
-    ) {
-      return true;
-    }
-    try {
-      await ctx.api.editMessageText(chatId, messageId, rawText ?? displayText);
-      return false;
-    } catch (err2: any) {
-      if (
-        !(
-          err2?.description?.includes("message is not modified") ||
-          err2?.description?.includes("message can't be edited")
-        )
-      ) {
-        throw err2;
-      }
-      return false;
-    }
-  }
-}
-
-/** Send a draft update. Falls back to plain text on HTML parse failure. Swallows "not modified" errors. */
-async function safeSendDraft(
+/** Stream a partial rich message. Swallows transient draft errors (drafts are ephemeral). */
+async function safeSendRichDraft(
   ctx: Context,
   chatId: number,
   draftId: number,
-  html: string,
-  rawText?: string
+  input: RichInput
 ) {
-  const displayText = html || "...";
   try {
-    await ctx.api.sendMessageDraft(chatId, draftId, displayText, {
-      parse_mode: "HTML",
-    });
-  } catch (err: any) {
-    if (err?.description?.includes("not modified")) {
-      return;
-    }
-    try {
-      await ctx.api.sendMessageDraft(chatId, draftId, rawText ?? displayText);
-    } catch (err2: any) {
-      if (!err2?.description?.includes("not modified")) {
-        throw err2;
-      }
-    }
+    await ctx.api.sendRichMessageDraft(chatId, draftId, input);
+  } catch {
+    // dropped draft updates are harmless
   }
 }
 
-/** Send a permanent message with HTML fallback. Returns the Message or throws on real errors. */
-async function safeSendMessage(
+/** Persist a rich message. Falls back to plain text on failure. */
+async function safeSendRichMessage(
   ctx: Context,
   chatId: number,
-  html: string,
-  rawText?: string
+  input: RichInput,
+  plain?: string
 ) {
-  const displayText = html || "...";
   try {
-    return await ctx.api.sendMessage(chatId, displayText, {
-      parse_mode: "HTML",
-    });
+    return await ctx.api.sendRichMessage(chatId, input);
   } catch {
-    return await ctx.api.sendMessage(chatId, rawText ?? displayText);
+    const fallback =
+      plain ?? ("markdown" in input ? input.markdown : input.html);
+    return await ctx.api.sendMessage(chatId, fallback || "...");
   }
+}
+
+/** Send raw markdown as a rich message (used for one-shot content like plans). */
+export function sendRichMarkdown(
+  ctx: Context,
+  chatId: number,
+  markdown: string
+) {
+  return safeSendRichMessage(ctx, chatId, { markdown: markdown || "..." });
 }
 
 interface StreamResult {
@@ -229,7 +90,7 @@ interface StreamOptions {
 
 type MessageMode = "text" | "tools" | "thinking" | "none";
 
-/** Stream agent events into separate Telegram messages by type, gated by the active provider's capabilities */
+/** Stream agent events into separate Telegram rich messages by type, gated by the active provider's capabilities */
 export async function streamToTelegram(
   ctx: Context,
   events: AsyncGenerator<AgentEvent>,
@@ -242,106 +103,31 @@ export async function streamToTelegram(
   const result: StreamResult = {};
 
   let mode: MessageMode = "none";
-  let messageId = 0;
   let accumulated = "";
   let lastEditTime = 0;
   let pendingEdit = false;
   let toolLines: string[] = [];
   let thinkingText = "";
   let lastTextMessageId = 0;
-  let useDrafts: boolean | null = null;
-  const draftId = chatId;
-
-  /** Send a new Telegram message and track its ID */
-  const sendNew = async (text: string, parseMode?: "HTML") => {
-    const opts: Record<string, unknown> = {};
-    if (parseMode) {
-      opts.parse_mode = parseMode;
-    }
-    const sent = await ctx.api.sendMessage(chatId, text, opts);
-    messageId = sent.message_id;
-    lastEditTime = 0;
-    pendingEdit = false;
-    return sent;
+  // Each streaming phase gets its own non-zero draft id so the client renders
+  // thinking/text/tools as separate previews instead of morphing one slot.
+  let draftSeq = 0;
+  let currentDraftId = 0;
+  const startDraft = () => {
+    draftSeq += 1;
+    currentDraftId = draftSeq;
   };
 
-  /** Finalize the current text message (split-safe edit) */
-  const flushText = async (final = false) => {
-    if (!accumulated) {
-      return;
-    }
-
-    const interval = useDrafts ? DRAFT_INTERVAL_MS : EDIT_INTERVAL_MS;
-    const now = Date.now();
-    if (!final && now - lastEditTime < interval) {
-      pendingEdit = true;
-      return;
-    }
-    pendingEdit = false;
-    lastEditTime = now;
-
-    let text = accumulated;
-    if (text.length > MAX_MSG_LENGTH) {
-      const cutPoint = text.lastIndexOf("\n", MAX_MSG_LENGTH);
-      const splitAt =
-        cutPoint > MAX_MSG_LENGTH * 0.5 ? cutPoint : MAX_MSG_LENGTH;
-      const chunk = text.slice(0, splitAt);
-      accumulated = text.slice(splitAt);
-
-      if (useDrafts) {
-        await safeSendMessage(
-          ctx,
-          chatId,
-          markdownToTelegramHtml(chunk),
-          chunk
-        );
-      } else {
-        await safeEditMessage(
-          ctx,
-          chatId,
-          messageId,
-          markdownToTelegramHtml(chunk),
-          chunk
-        );
-        await sendNew("...");
-      }
-      text = accumulated;
-    }
-
-    if (useDrafts) {
-      await safeSendDraft(
-        ctx,
-        chatId,
-        draftId,
-        markdownToTelegramHtml(text),
-        text
-      );
-    } else {
-      await safeEditMessage(
-        ctx,
-        chatId,
-        messageId,
-        markdownToTelegramHtml(text),
-        text
-      );
-    }
-  };
-
-  /** Update the tools message with current tool lines */
-  const flushTools = async () => {
-    if (toolLines.length === 0) {
-      return;
-    }
+  /** Render the current tool lines as Telegram HTML */
+  const renderToolsHtml = () => {
     const lines = toolLines.map((l) => `<i>${escapeHtml(l)}</i>`).join("\n");
-    const text =
-      toolLines.length >= 4
-        ? `<blockquote expandable>${lines}</blockquote>`
-        : lines;
-    await safeEditMessage(ctx, chatId, messageId, text, toolLines.join("\n"));
+    return toolLines.length >= 4
+      ? `<blockquote expandable>${lines}</blockquote>`
+      : lines;
   };
 
-  /** Render thinking text as HTML (expandable blockquote if 4+ lines) */
-  const renderThinkingHtml = (text: string) => {
+  /** Render thinking text as HTML (expandable blockquote if 4+ lines), tail-truncated to fit */
+  const renderThinking = (text: string) => {
     let display = text;
     if (display.length > MAX_MSG_LENGTH - 200) {
       display = `...${display.slice(display.length - (MAX_MSG_LENGTH - 200))}`;
@@ -351,58 +137,81 @@ export async function streamToTelegram(
       escaped.split("\n").length >= 4
         ? `<blockquote expandable><i>${escaped}</i></blockquote>`
         : `<i>${escaped}</i>`;
-    return { html, plainText: display };
+    return { html, plain: display };
   };
 
-  /** Update the thinking message with accumulated thinking text */
-  const flushThinking = async (final = false) => {
-    if (!thinkingText) {
+  /** Stream the accumulated model text, persisting overflow chunks as they exceed the limit */
+  const flushText = async (final = false) => {
+    if (!accumulated) {
       return;
     }
-
-    const interval = useDrafts ? DRAFT_INTERVAL_MS : EDIT_INTERVAL_MS;
     const now = Date.now();
-    if (!final && now - lastEditTime < interval) {
+    if (!final && now - lastEditTime < DRAFT_INTERVAL_MS) {
       pendingEdit = true;
       return;
     }
     pendingEdit = false;
     lastEditTime = now;
 
-    const { html, plainText } = renderThinkingHtml(thinkingText);
-    if (useDrafts) {
-      await safeSendDraft(ctx, chatId, draftId, html, plainText);
-    } else {
-      await safeEditMessage(ctx, chatId, messageId, html, plainText);
+    if (accumulated.length > MAX_MSG_LENGTH) {
+      const cutPoint = accumulated.lastIndexOf("\n", MAX_MSG_LENGTH);
+      const splitAt =
+        cutPoint > MAX_MSG_LENGTH * 0.5 ? cutPoint : MAX_MSG_LENGTH;
+      const chunk = accumulated.slice(0, splitAt);
+      accumulated = accumulated.slice(splitAt);
+      await safeSendRichMessage(ctx, chatId, { markdown: chunk });
     }
+    await safeSendRichDraft(ctx, chatId, currentDraftId, {
+      markdown: accumulated,
+    });
   };
 
-  /** Switch to a new mode, finalizing the previous one */
+  /** Stream the current tool lines as a draft */
+  const flushTools = async () => {
+    if (toolLines.length === 0) {
+      return;
+    }
+    await safeSendRichDraft(ctx, chatId, currentDraftId, {
+      html: renderToolsHtml(),
+    });
+  };
+
+  /** Stream the accumulated thinking text as a draft */
+  const flushThinking = async (final = false) => {
+    if (!thinkingText) {
+      return;
+    }
+    const now = Date.now();
+    if (!final && now - lastEditTime < DRAFT_INTERVAL_MS) {
+      pendingEdit = true;
+      return;
+    }
+    pendingEdit = false;
+    lastEditTime = now;
+    await safeSendRichDraft(ctx, chatId, currentDraftId, {
+      html: renderThinking(thinkingText).html,
+    });
+  };
+
+  /** Switch to a new mode, persisting the previous one as a permanent message */
   const switchMode = async (newMode: MessageMode) => {
     if (mode === "text" && accumulated) {
-      if (useDrafts) {
-        const sent = await safeSendMessage(
-          ctx,
-          chatId,
-          markdownToTelegramHtml(accumulated),
-          accumulated
-        );
-        lastTextMessageId = sent?.message_id ?? 0;
-      } else {
-        await flushText(true);
-        lastTextMessageId = messageId;
-      }
+      const sent = await safeSendRichMessage(ctx, chatId, {
+        markdown: accumulated,
+      });
+      lastTextMessageId = sent?.message_id ?? 0;
     }
-    if (mode === "tools") {
-      await flushTools();
+    if (mode === "tools" && toolLines.length > 0) {
+      await safeSendRichMessage(
+        ctx,
+        chatId,
+        { html: renderToolsHtml() },
+        toolLines.join("\n")
+      );
     }
     if (mode === "thinking" && thinkingText) {
-      if (useDrafts) {
-        const { html, plainText } = renderThinkingHtml(thinkingText);
-        await safeSendMessage(ctx, chatId, html, plainText);
-      } else {
-        await flushThinking(true);
-      }
+      const { html, plain } = renderThinking(thinkingText);
+      await safeSendRichMessage(ctx, chatId, { html }, plain);
     }
     mode = newMode;
     accumulated = "";
@@ -430,26 +239,14 @@ export async function streamToTelegram(
       if (event.kind === "text_delta") {
         if (mode !== "text") {
           mode = await switchMode("text");
-          if (useDrafts === null) {
-            try {
-              await ctx.api.sendMessageDraft(chatId, draftId, "...", {
-                parse_mode: "HTML",
-              });
-              useDrafts = true;
-            } catch {
-              useDrafts = false;
-              await sendNew("...");
-            }
-          } else if (!useDrafts) {
-            await sendNew("...");
-          }
+          startDraft();
         }
         accumulated += event.text;
         await flushText().catch(() => {});
       } else if (event.kind === "tool_use") {
         if (mode !== "tools") {
           mode = await switchMode("tools");
-          await sendNew("...");
+          startDraft();
         }
         const label = event.input
           ? `${event.name}: ${event.input}`
@@ -461,34 +258,20 @@ export async function streamToTelegram(
           continue;
         }
         mode = await switchMode("thinking");
-        if (useDrafts) {
-          await safeSendDraft(
-            ctx,
-            chatId,
-            draftId,
-            "<i>Thinking...</i>",
-            "Thinking..."
-          );
-        } else {
-          await sendNew("<i>Thinking...</i>", "HTML");
-        }
+        startDraft();
+        await safeSendRichDraft(ctx, chatId, currentDraftId, {
+          html: "<i>Thinking...</i>",
+        });
       } else if (event.kind === "thinking_delta") {
         if (!capabilities.thinking) {
           continue;
         }
         if (mode !== "thinking") {
           mode = await switchMode("thinking");
-          if (useDrafts) {
-            await safeSendDraft(
-              ctx,
-              chatId,
-              draftId,
-              "<i>Thinking...</i>",
-              "Thinking..."
-            );
-          } else {
-            await sendNew("<i>Thinking...</i>", "HTML");
-          }
+          startDraft();
+          await safeSendRichDraft(ctx, chatId, currentDraftId, {
+            html: "<i>Thinking...</i>",
+          });
         }
         thinkingText += event.text;
         await flushThinking().catch(() => {});
@@ -497,12 +280,8 @@ export async function streamToTelegram(
           continue;
         }
         if (mode === "thinking" && thinkingText) {
-          if (useDrafts) {
-            const { html, plainText } = renderThinkingHtml(thinkingText);
-            await safeSendMessage(ctx, chatId, html, plainText);
-          } else {
-            await flushThinking(true);
-          }
+          const { html, plain } = renderThinking(thinkingText);
+          await safeSendRichMessage(ctx, chatId, { html }, plain);
         }
         thinkingText = "";
         mode = "none";
@@ -512,15 +291,15 @@ export async function streamToTelegram(
         }
         if (mode !== "tools") {
           mode = await switchMode("tools");
-          await sendNew("...");
+          startDraft();
         }
-        toolLines.push(`\u23F3 Agent: ${event.description}`);
+        toolLines.push(`⏳ Agent: ${event.description}`);
         await flushTools().catch(() => {});
       } else if (event.kind === "agent_done") {
         if (!capabilities.subagents) {
           continue;
         }
-        const icon = event.status === "completed" ? "\u2705" : "\u274C";
+        const icon = event.status === "completed" ? "✅" : "❌";
         let line = `${icon} Agent: ${event.description}`;
         const parts: string[] = [];
         if (event.durationMs !== undefined) {
@@ -537,7 +316,12 @@ export async function streamToTelegram(
         if (parts.length > 0) {
           line += ` (${parts.join(", ")})`;
         }
-        await safeSendMessage(ctx, chatId, `<i>${escapeHtml(line)}</i>`, line);
+        await safeSendRichMessage(
+          ctx,
+          chatId,
+          { html: `<i>${escapeHtml(line)}</i>` },
+          line
+        );
       } else if (event.kind === "session_init") {
         result.sessionId = event.sessionId;
       } else if (event.kind === "plan_ready") {
@@ -551,18 +335,12 @@ export async function streamToTelegram(
         if (!accumulated && event.text) {
           if (mode !== "text") {
             mode = await switchMode("text");
-            if (!useDrafts) {
-              await sendNew("...");
-            }
           }
           accumulated = event.text;
         }
       } else if (event.kind === "error") {
         if (mode !== "text") {
           mode = await switchMode("text");
-          if (!useDrafts) {
-            await sendNew("...");
-          }
         }
         accumulated += `\n\n[Error: ${event.message}]`;
       }
@@ -572,42 +350,14 @@ export async function streamToTelegram(
     clearInterval(typingTimer);
   }
 
-  // Final edit on the last text message with footer
-  if (mode === "text" && accumulated && !useDrafts) {
-    lastTextMessageId = messageId;
-  }
-
   const footer = formatFooter(projectName, result, capabilities, branchName);
 
-  if (accumulated && (useDrafts || lastTextMessageId)) {
-    const html = markdownToTelegramHtml(accumulated);
-    const display = footer ? `${html}\n\n${footer}` : html;
-
-    if (useDrafts) {
-      const sent = await safeSendMessage(
-        ctx,
-        chatId,
-        display || "...",
-        accumulated
-      );
-      lastTextMessageId = sent?.message_id ?? 0;
-    } else {
-      const ok = await safeEditMessage(
-        ctx,
-        chatId,
-        lastTextMessageId,
-        display || "..."
-      ).catch(() => false);
-      if (!ok && footer) {
-        await ctx.api
-          .sendMessage(chatId, footer, { parse_mode: "HTML" })
-          .catch(() => {});
-      }
-    }
-  } else if (!lastTextMessageId && footer) {
-    await ctx.api
-      .sendMessage(chatId, footer, { parse_mode: "HTML" })
-      .catch(() => {});
+  if (accumulated) {
+    const display = footer ? `${accumulated}\n\n${footer}` : accumulated;
+    const sent = await safeSendRichMessage(ctx, chatId, { markdown: display });
+    lastTextMessageId = sent?.message_id ?? 0;
+  } else if (footer && !lastTextMessageId) {
+    await safeSendRichMessage(ctx, chatId, { markdown: footer });
   }
 
   result.messageId = lastTextMessageId || undefined;
@@ -615,7 +365,7 @@ export async function streamToTelegram(
   return result;
 }
 
-/** Format metadata footer as HTML, gating cost/turns by provider capabilities */
+/** Format metadata footer as italic markdown, gating cost/turns by provider capabilities */
 function formatFooter(
   projectName: string,
   result: StreamResult,
@@ -625,7 +375,7 @@ function formatFooter(
   const meta: string[] = [];
   if (projectName) {
     meta.push(
-      `Project: ${branchName ? `${escapeHtml(projectName)} [${escapeHtml(branchName)}]` : escapeHtml(projectName)}`
+      `Project: ${branchName ? `${projectName} [${branchName}]` : projectName}`
     );
   }
   if (capabilities.cost && result.cost !== undefined) {
@@ -642,5 +392,8 @@ function formatFooter(
   if (turnsMeaningful) {
     meta.push(`Turns: ${result.turns}`);
   }
-  return meta.length > 0 ? `<i>${meta.join(" | ")}</i>` : "";
+  if (meta.length === 0) {
+    return "";
+  }
+  return `_${meta.join(" | ")}_`;
 }
