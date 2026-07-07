@@ -8,7 +8,6 @@ interface ProcessEntry {
 
 /** Global per-user process map — one active process per user across all providers */
 const userProcesses = new Map<number, ProcessEntry>();
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * Spawn a provider CLI and yield streaming events, tracked per Telegram user.
@@ -51,12 +50,6 @@ export async function* runProvider(
     env,
     signal: ac.signal,
   });
-
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    ac.abort();
-  }, DEFAULT_TIMEOUT_MS);
 
   let stderrBuffer = "";
   const stderrDrain = (async () => {
@@ -102,11 +95,10 @@ export async function* runProvider(
       };
     }
   } catch (_err) {
-    const reason = timedOut ? "Process timed out." : "Process was stopped.";
+    const reason = "Process was stopped.";
     const detail = stderrBuffer.trim();
     yield { kind: "error", message: detail ? `${reason}\n${detail}` : reason };
   } finally {
-    clearTimeout(timeout);
     proc.kill();
     await proc.exited;
     await stderrDrain.catch(() => {});
