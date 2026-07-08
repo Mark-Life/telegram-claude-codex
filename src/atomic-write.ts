@@ -11,7 +11,7 @@ export const uniqueTmp = (path: string) =>
 /**
  * Atomically persist `value` as pretty JSON: write to a unique tmp file, then
  * rename over the target (rename is atomic on POSIX). Returns the serialized
- * byte size and wall-clock duration for observability.
+ * UTF-8 byte size (as written to disk) and wall-clock duration for observability.
  */
 export const writeJsonAtomic = (path: string, value: unknown) => {
   const started = performance.now();
@@ -19,5 +19,8 @@ export const writeJsonAtomic = (path: string, value: unknown) => {
   const tmp = uniqueTmp(path);
   writeFileSync(tmp, body);
   renameSync(tmp, path);
-  return { bytes: body.length, durationMs: performance.now() - started };
+  return {
+    bytes: Buffer.byteLength(body, "utf8"),
+    durationMs: performance.now() - started,
+  };
 };

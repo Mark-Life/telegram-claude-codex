@@ -9,6 +9,7 @@
     "fix": "bunx --bun ultracite fix",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:watch": "bun test --watch",
     "logs": "bash scripts/logs.sh runs",
     "logs:errors": "bash scripts/logs.sh errors",
     "logs:stats": "bash scripts/logs.sh stats",

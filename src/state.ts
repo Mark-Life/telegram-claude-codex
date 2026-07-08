@@ -105,42 +105,65 @@ function parseState(text: string) {
   };
 }
 
+/** Discriminated result of reading the raw state file (no side effects beyond corrupt-preservation). */
+type StateLoad =
+  | { status: "missing" }
+  | { status: "corrupt"; preservedTo: string; errorClass: string }
+  | ({ status: "ok" } & ReturnType<typeof parseState>);
+
 /**
- * Load persisted state, distinguishing a legitimate first run from corruption.
- * A missing file returns null (fresh start). A parse/corruption error preserves
- * the bad file as `state.json.corrupt-<ts>` (best-effort — a read-only `.data`
- * must not block boot) and returns null so the bot still starts with defaults —
- * never a silent total wipe. Legacy inline sessions are imported once into the
- * SessionStore on a successful read.
+ * Read + classify the state file, distinguishing a legitimate first run
+ * (`missing`) from genuine corruption. A parse/shape fault preserves the bad
+ * file as `state.json.corrupt-<ts>` (best-effort — a read-only `.data` must not
+ * block boot) and reports `corrupt` so the caller fails open to defaults —
+ * never a silent total wipe. Pure of runtime logging + legacy import so it is
+ * directly unit-testable against a temp dir. A real IO fault (not ENOENT) is
+ * rethrown rather than masked as empty state.
  */
-export function loadPersistedState() {
+export function readStateFile(stateFile = STATE_FILE): StateLoad {
   let text: string;
   try {
-    text = readFileSync(STATE_FILE, "utf-8");
+    text = readFileSync(stateFile, "utf-8");
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      logEvent({ event: "state.load", result: "missing" });
-      return null;
+      return { status: "missing" };
     }
     throw e; // real IO fault — surface, don't mask as empty state
   }
 
-  let parsed: ReturnType<typeof parseState>;
   try {
-    parsed = parseState(text);
+    return { status: "ok", ...parseState(text) };
   } catch (err) {
     // Only a genuine parse/shape fault is corruption. Preserve the bad file.
-    const corruptPath = `${STATE_FILE}.corrupt-${Date.now()}`;
+    const preservedTo = `${stateFile}.corrupt-${Date.now()}`;
     try {
-      renameSync(STATE_FILE, corruptPath);
+      renameSync(stateFile, preservedTo);
     } catch {
       // keep booting even if preservation fails (read-only / full disk)
     }
+    return { status: "corrupt", preservedTo, errorClass: (err as Error).name };
+  }
+}
+
+/**
+ * Load persisted state, distinguishing a legitimate first run from corruption.
+ * A missing/corrupt file returns null so the bot still starts with defaults;
+ * corruption is preserved (see readStateFile). Legacy inline sessions are
+ * imported once into the SessionStore on a successful read.
+ */
+export function loadPersistedState() {
+  const loaded = readStateFile();
+
+  if (loaded.status === "missing") {
+    logEvent({ event: "state.load", result: "missing" });
+    return null;
+  }
+  if (loaded.status === "corrupt") {
     logEvent({
       event: "state.load",
       result: "corrupt",
-      preservedTo: corruptPath,
-      errorClass: (err as Error).name,
+      preservedTo: loaded.preservedTo,
+      errorClass: loaded.errorClass,
     });
     return null; // fail open: boot with defaults, but the data is preserved
   }
@@ -149,7 +172,7 @@ export function loadPersistedState() {
   // fault there must never be mistaken for state.json corruption, so it is
   // best-effort and outside the corruption guard above.
   try {
-    importLegacySessions(parsed.legacySessions);
+    importLegacySessions(loaded.legacySessions);
   } catch (err) {
     logEvent({
       event: "state.load",
@@ -159,8 +182,8 @@ export function loadPersistedState() {
   }
   logEvent({ event: "state.load", result: "ok" });
   return {
-    activeProvider: parsed.activeProvider,
-    activeProject: parsed.activeProject,
+    activeProvider: loaded.activeProvider,
+    activeProject: loaded.activeProject,
   };
 }
 

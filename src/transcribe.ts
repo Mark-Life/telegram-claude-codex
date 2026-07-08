@@ -1,7 +1,17 @@
 import Groq from "groq-sdk";
 
-const groq = new Groq();
 const TRANSCRIBE_TIMEOUT = 60_000;
+
+/**
+ * Lazily construct the Groq client on first use. Constructing at module load
+ * throws when GROQ_API_KEY is unset (e.g. under `bun test`), so defer it to the
+ * first transcription — the bot validates the key at boot regardless.
+ */
+let client: Groq | undefined;
+const groqClient = () => {
+  client ??= new Groq();
+  return client;
+};
 
 /** Race a promise against a timeout, rejecting with a descriptive error */
 function withTimeout<T>(
@@ -31,7 +41,10 @@ export async function transcribeAudio(buffer: Buffer, filename: string) {
     type: "audio/ogg",
   });
   const response = await withTimeout(
-    groq.audio.transcriptions.create({ file, model: "whisper-large-v3-turbo" }),
+    groqClient().audio.transcriptions.create({
+      file,
+      model: "whisper-large-v3-turbo",
+    }),
     TRANSCRIBE_TIMEOUT,
     "Groq transcription"
   );

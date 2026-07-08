@@ -9,6 +9,18 @@
       "!dist/**/*"
     ]
   },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": { "noMagicNumbers": "off" },
+          "complexity": { "noExcessiveCognitiveComplexity": "off" },
+          "suspicious": { "useAwait": "off" }
+        }
+      }
+    }
+  ],
   "javascript": {
     "globals": ["Bun"]
   },
