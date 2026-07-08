@@ -1,4 +1,5 @@
 import { spawn } from "bun";
+import { Option } from "effect";
 import { stopAll } from "./agent";
 import { getProvider } from "./agent/registry";
 import { cleanupStaleState } from "./bot";
@@ -63,6 +64,13 @@ process.on("SIGINT", shutdown);
 bot.start({
   onStart: () => {
     console.log("Bot started");
+    // Auth mode is silently flipped by ANTHROPIC_API_KEY presence: absent =>
+    // on-disk subscription login (~/.claude); present => metered API pricing.
+    console.log(
+      Option.isSome(cfg.anthropicApiKey)
+        ? "Agent auth: ANTHROPIC_API_KEY (API pricing)"
+        : "Agent auth: subscription login (~/.claude)"
+    );
     checkCodexAvailable();
     cleanupTimer = setInterval(cleanupStaleState, CLEANUP_INTERVAL);
     const commands = [

@@ -1,6 +1,7 @@
 import { BunServices } from "@effect/platform-bun";
 import { Layer, ManagedRuntime } from "effect";
 import { RunRegistry } from "./agent/run-registry";
+import { SessionStore } from "./agent/session-store";
 import { AppConfig } from "./config";
 import { loggerLayer } from "./logger";
 import { Observability } from "./observability";
@@ -26,7 +27,8 @@ const infraLayer = Layer.mergeAll(
 const appLayer = Layer.mergeAll(
   BotService.layer,
   RunRegistry.layer,
-  Observability.layer
+  Observability.layer,
+  SessionStore.layer
 ).pipe(Layer.provideMerge(infraLayer));
 
 /**

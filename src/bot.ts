@@ -20,6 +20,12 @@ import {
 } from "./agent";
 import { classifyOutcome, runOutcomeOf } from "./agent/errors";
 import { listProviders } from "./agent/registry";
+import {
+  clearSession,
+  countSessions,
+  getSession,
+  setSession,
+} from "./agent/session-store";
 import type { ProviderId } from "./agent/types";
 import {
   getCurrentBranch,
@@ -38,7 +44,6 @@ import {
   loadPersistedState,
   setActiveProject,
   setActiveProvider,
-  updateSession,
 } from "./state";
 import {
   type StreamResult,
@@ -183,7 +188,6 @@ interface UserState {
   pendingPlan?: PendingPlan;
   queue: QueuedMessage[];
   queueStatusMessageId?: number;
-  sessions: Record<ProviderId, Map<string, string>>;
 }
 
 const userStates = new Map<number, UserState>();
@@ -326,7 +330,6 @@ function getState(id: number): UserState {
     state = {
       activeProvider: persisted?.activeProvider ?? "claude",
       activeProject: persisted?.activeProject ?? "",
-      sessions: persisted?.sessions ?? { claude: new Map(), codex: new Map() },
       queue: [],
     };
     userStates.set(id, state);
@@ -618,7 +621,9 @@ export function createBot(
     const state = getState(getUserId(ctx));
     const project = describeProject(state.activeProject, projectsDir);
     const running = hasActiveProcess(getUserId(ctx)) ? "Yes" : "No";
-    const sessionCount = state.sessions[state.activeProvider].size;
+    const sessionCount = await runtime.runPromise(
+      countSessions(state.activeProvider)
+    );
     const branch =
       state.activeProject && state.activeProject !== projectsDir
         ? getCurrentBranch(state.activeProject)
@@ -734,11 +739,18 @@ export function createBot(
   });
 
   bot.command("new", async (ctx) => {
-    const state = getState(getUserId(ctx));
+    const userId = getUserId(ctx);
+    const state = getState(userId);
     if (!state.activeProject) {
       setActiveProject(state, projectsDir);
     }
-    updateSession(state, state.activeProvider, state.activeProject);
+    // Interrupt any in-flight run first: otherwise its session_init/result tap
+    // would re-persist the session id right after we clear it, so /new would
+    // fail to start a fresh conversation.
+    stopAgent(userId, "stopped");
+    await runtime.runPromise(
+      clearSession(state.activeProject, state.activeProvider)
+    );
     state.queue = [];
     state.pendingPlan = undefined;
     state.composeMessages = undefined;
@@ -923,7 +935,13 @@ export function createBot(
       return;
     }
 
-    updateSession(state, state.activeProvider, state.activeProject, sessionId);
+    await runtime.runPromise(
+      setSession({
+        project: state.activeProject,
+        provider: state.activeProvider,
+        sessionId,
+      })
+    );
     const chatId = requireChat(ctx);
     const projectName = basename(state.activeProject);
     await ctx.answerCallbackQuery({ text: "Session resumed" });
@@ -1023,7 +1041,9 @@ export function createBot(
     }
 
     setActiveProject(state, plan.projectPath);
-    updateSession(state, state.activeProvider, plan.projectPath);
+    await runtime.runPromise(
+      clearSession(plan.projectPath, state.activeProvider)
+    );
     state.pendingPlan = undefined;
     await ctx.answerCallbackQuery({ text: "Executing plan (new session)..." });
     await ctx.editMessageText("Executing plan (new session)...");
@@ -1045,11 +1065,12 @@ export function createBot(
 
     setActiveProject(state, plan.projectPath);
     if (plan.sessionId) {
-      updateSession(
-        state,
-        state.activeProvider,
-        plan.projectPath,
-        plan.sessionId
+      await runtime.runPromise(
+        setSession({
+          project: plan.projectPath,
+          provider: state.activeProvider,
+          sessionId: plan.sessionId,
+        })
       );
     }
     state.pendingPlan = undefined;
@@ -1119,11 +1140,12 @@ export function createBot(
       const plan = pendingPlan;
       setActiveProject(state, plan.projectPath);
       if (plan.sessionId) {
-        updateSession(
-          state,
-          state.activeProvider,
-          plan.projectPath,
-          plan.sessionId
+        await runtime.runPromise(
+          setSession({
+            project: plan.projectPath,
+            provider: state.activeProvider,
+            sessionId: plan.sessionId,
+          })
         );
       }
       state.pendingPlan = undefined;
@@ -1148,8 +1170,8 @@ export function createBot(
     state: UserState,
     userId: number
   ) {
-    const sessionId = state.sessions[state.activeProvider].get(
-      state.activeProject
+    const sessionId = await runtime.runPromise(
+      getSession(state.activeProject, state.activeProvider)
     );
     const projectName =
       state.activeProject === projectsDir
@@ -1198,8 +1220,9 @@ export function createBot(
         { branchName }
       );
       if (result.sessionId) {
+        // Persisted by the runner's stream tap (session_init + result); here we
+        // only carry it onto the wide event.
         rec.sessionId = result.sessionId;
-        updateSession(state, provider, project, result.sessionId);
       }
       applyResultEconomics(result, rec);
 

@@ -3,6 +3,7 @@ import { runtime } from "../runtime";
 import type { InterruptReason } from "./errors";
 import { getProvider } from "./registry";
 import { hasRun, startRun, stopAllRuns, stopRun } from "./run-registry";
+import { setSession } from "./session-store";
 import type { AgentEvent, ProviderId, RunOptions } from "./types";
 
 /** Run a provider agent, yielding normalized events. Stays an AsyncGenerator. */
@@ -18,7 +19,19 @@ export async function* runAgent(
       if (Exit.isFailure(exit)) {
         return; // Cause.Done (end) or interrupt of the take => stream over
       }
-      yield exit.value;
+      const event = exit.value;
+      // Persist the session id as soon as it exists — on session_init AND result,
+      // not result-only — so an interrupted run's session is still resumable.
+      if (event.kind === "session_init" || event.kind === "result") {
+        runtime.runFork(
+          setSession({
+            project: opts.projectDir,
+            provider: providerId,
+            sessionId: event.sessionId,
+          })
+        );
+      }
+      yield event;
     }
   } finally {
     // Consumer abandoned early (e.g. telegram broke on plan_ready) => tear the
