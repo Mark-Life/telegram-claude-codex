@@ -1,4 +1,9 @@
 import { Config, Context, Effect, Layer, Option, Redacted } from "effect";
+import {
+  DEFAULT_CLAUDE_SETTINGS,
+  mergeClaudeSettings,
+  parseClaudeSettings,
+} from "./agent/claude-settings";
 
 /**
  * Reads and validates all application configuration from the environment.
@@ -50,6 +55,27 @@ const load = Effect.gen(function* () {
     Config.withDefault(".data/events.jsonl")
   );
 
+  // Claude Agent SDK settings passed to every run. Defaults harden the headless
+  // agent (see DEFAULT_CLAUDE_SETTINGS); CLAUDE_SETTINGS_JSON overlays a JSON
+  // override and dies at boot on malformed JSON (fail-fast parity).
+  const claudeSettingsJson = yield* Config.option(
+    Config.string("CLAUDE_SETTINGS_JSON")
+  );
+  const claudeSettings = yield* Option.match(claudeSettingsJson, {
+    onNone: () => Effect.succeed(DEFAULT_CLAUDE_SETTINGS),
+    onSome: (json) =>
+      Effect.gen(function* () {
+        try {
+          return mergeClaudeSettings(
+            DEFAULT_CLAUDE_SETTINGS,
+            parseClaudeSettings(json)
+          );
+        } catch {
+          return yield* Effect.die("CLAUDE_SETTINGS_JSON must be valid JSON");
+        }
+      }),
+  });
+
   return {
     botToken,
     allowedUserId,
@@ -61,6 +87,7 @@ const load = Effect.gen(function* () {
     runTimeoutMs,
     maxConcurrentRuns,
     eventLogPath,
+    claudeSettings,
   } as const;
 });
 

@@ -29,6 +29,7 @@ const makeRuntime = (maxConcurrentRuns: number) => {
     runTimeoutMs: Option.none(),
     maxConcurrentRuns,
     eventLogPath: ".data/events.jsonl",
+    claudeSettings: {},
   } satisfies typeof AppConfig.Service;
   const layer = RunRegistry.layer.pipe(
     Layer.provide(Layer.succeed(AppConfig, cfg))

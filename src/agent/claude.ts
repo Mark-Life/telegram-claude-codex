@@ -2,7 +2,11 @@ import {
   type Options,
   query,
   type SDKMessage,
+  type Settings,
 } from "@anthropic-ai/claude-agent-sdk";
+import { Effect } from "effect";
+import { AppConfig } from "../config";
+import { runtime } from "../runtime";
 import {
   clearSessionCache,
   getSessionProject,
@@ -245,9 +249,15 @@ const buildFileSystemPrompt = (chatId: number) => {
  * prompt (preset) with the file-send instructions appended, streams partial
  * messages for token-level text/thinking, and wires a fresh AbortController to
  * the caller's signal so the runner's scope-close tears the SDK subprocess down.
- * No apiKey is set: subscription/local auth stays the default.
+ * No apiKey is set: subscription/local auth stays the default. `settings` is the
+ * boot-resolved hardening layer (AppConfig.claudeSettings) and wins over any
+ * ambient ~/.claude/settings.json.
  */
-const buildQuery = (opts: RunOptions, signal: AbortSignal) => {
+const buildQuery = (
+  opts: RunOptions,
+  signal: AbortSignal,
+  settings: Settings
+) => {
   const abortController = new AbortController();
   signal.addEventListener("abort", () => abortController.abort(), {
     once: true,
@@ -258,6 +268,7 @@ const buildQuery = (opts: RunOptions, signal: AbortSignal) => {
     allowDangerouslySkipPermissions: true,
     abortController,
     includePartialMessages: true,
+    settings,
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
@@ -269,6 +280,9 @@ const buildQuery = (opts: RunOptions, signal: AbortSignal) => {
   }
   return { prompt: opts.prompt, options };
 };
+
+/** Boot-resolved Claude settings, read from the runtime's AppConfig. */
+const readClaudeSettings = Effect.map(AppConfig, (c) => c.claudeSettings);
 
 /**
  * Drive the Claude Agent SDK for one run, normalizing its message stream into
@@ -287,7 +301,8 @@ async function* run(
   };
   let sawStreamEvents = false;
 
-  for await (const msg of query(buildQuery(opts, signal))) {
+  const settings = runtime.runSync(readClaudeSettings);
+  for await (const msg of query(buildQuery(opts, signal, settings))) {
     if (msg.type === "stream_event") {
       sawStreamEvents = true;
       yield* handlePartialEvent(state, msg.event);

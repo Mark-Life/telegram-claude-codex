@@ -28,8 +28,9 @@ Telegram bot that bridges coding-agent CLIs (Claude Code + OpenAI Codex) with Te
 
 - **types.ts** — `AgentEvent` (normalized event model), `ProviderId` (`"claude"|"codex"`), `RunOptions`, `ProviderCapabilities` (`{cost, planMode, subagents, thinking}`), `SessionInfo`, `ProviderSpec`, `AgentProvider`.
 - **runner.ts** — Generic process lifecycle: global one-process-per-user (keyed by userId, across providers), AbortController, 10-min timeout, stdout line-buffering, stderr capture. AsyncGenerator yielding `AgentEvent`.
-- **claude.ts** — Claude `AgentProvider`: builds `claude -p … --output-format stream-json` args/env + stream-json parser + `.claude/plans/`/`ExitPlanMode` plan detection. Caps: all true.
-- **claude-history.ts** — `~/.claude/projects/...` session reader.
+- **claude.ts** — Claude `AgentProvider` (`kind:"sdk"`): drives `query()` from `@anthropic-ai/claude-agent-sdk`, mapping typed SDK messages onto `AgentEvent` (partial `stream_event`→text/thinking, complete assistant blocks→tool_use, `.claude/plans/`/`ExitPlanMode` plan detection). No apiKey (subscription auth). Passes `AppConfig.claudeSettings` via `options.settings`. Caps: all true.
+- **claude-settings.ts** — `DEFAULT_CLAUDE_SETTINGS` (hardened SDK `Settings`: denies interactive/harness tools, disables bundled skills/workflows/remote-control/artifacts, `effortLevel:"high"`; keeps plan mode). Overridable at boot via `CLAUDE_SETTINGS_JSON` (JSON overlay; top-level keys replace, `permissions` merges one level deep).
+- **claude-history.ts** — `~/.claude/projects/...` session reader (the SDK writes the same store; `persistSession` defaults on).
 - **codex.ts** — Codex `AgentProvider`: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check` (resume via `codex exec resume <id> …`; cwd comes from the spawn). JSONL→`AgentEvent` parser, `.codex/plans/`→`plan_ready` detection. File-send + plan-convention instructions injected via first-turn prompt prefix (Codex has no `--append-system-prompt`). Caps: `{planMode:true, thinking:true, cost:false, subagents:false}`.
 - **codex-history.ts** — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` session reader; project filtering via recorded cwd (realpath-normalized).
 - **registry.ts** — `getProvider(id)`, `listProviders()` (claude + codex registered).
