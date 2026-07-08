@@ -546,6 +546,9 @@ function formatFooter(
     const secs = (result.durationMs / 1000).toFixed(1);
     meta.push(`Time: ${secs}s`);
   }
+  if (result.totalTokens !== undefined) {
+    meta.push(`${(result.totalTokens / 1000).toFixed(1)}k tokens`);
+  }
   const turnsMeaningful =
     result.turns !== undefined &&
     result.turns > 1 &&
