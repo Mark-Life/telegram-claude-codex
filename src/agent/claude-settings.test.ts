@@ -6,13 +6,14 @@ import {
 } from "./claude-settings";
 
 describe("claude-settings", () => {
-  test("defaults harden the headless agent without denying plan mode", () => {
+  test("defaults harden the headless agent, deny plan mode, keep workflows on", () => {
     expect(DEFAULT_CLAUDE_SETTINGS.disableBundledSkills).toBe(true);
     expect(DEFAULT_CLAUDE_SETTINGS.effortLevel).toBe("high");
+    expect(DEFAULT_CLAUDE_SETTINGS.disableWorkflows).toBeUndefined();
     const deny = DEFAULT_CLAUDE_SETTINGS.permissions?.deny ?? [];
     expect(deny).toContain("AskUserQuestion");
-    expect(deny).not.toContain("ExitPlanMode");
-    expect(deny).not.toContain("EnterPlanMode");
+    expect(deny).toContain("ExitPlanMode");
+    expect(deny).toContain("EnterPlanMode");
   });
 
   test("top-level override keys replace wholesale", () => {
