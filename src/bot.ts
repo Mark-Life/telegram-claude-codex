@@ -286,7 +286,7 @@ export function createBot(
     const state = getState(userId);
     const wasRunning = hasActiveProcess(userId);
     if (wasRunning) {
-      stopAgent(userId);
+      stopAgent(userId, "switched");
     }
     // setActiveProvider mutates state.activeProvider in place and persists
     setActiveProvider(state, chosen);
@@ -415,7 +415,7 @@ export function createBot(
   bot.command("stop", async (ctx) => {
     const userId = getUserId(ctx);
     const state = getState(userId);
-    const stopped = stopAgent(userId);
+    const stopped = stopAgent(userId, "stopped");
     const hadQueue = state.queue.length > 0;
     state.queue = [];
     state.pendingPlan = undefined;
@@ -763,7 +763,7 @@ export function createBot(
 
   bot.callbackQuery(/^force_send:(\d+)$/, async (ctx) => {
     const userId = ctx.from.id;
-    const stopped = stopAgent(userId);
+    const stopped = stopAgent(userId, "new_prompt");
     await ctx.answerCallbackQuery({
       text: stopped ? "Stopping current task..." : "No active process",
     });
@@ -1006,7 +1006,7 @@ export function createBot(
           );
         }
         if (result.planPath && getCapabilities(state.activeProvider).planMode) {
-          stopAgent(userId);
+          stopAgent(userId, "stopped");
           await presentPlan(currentCtx, userId, state, result);
           return;
         }

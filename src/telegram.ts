@@ -1,4 +1,5 @@
 import type { Context } from "grammy";
+import { classifyOutcome } from "./agent/errors";
 import type { AgentEvent, ProviderCapabilities } from "./agent/types";
 
 const MAX_MSG_LENGTH = 4000;
@@ -342,7 +343,10 @@ export async function streamToTelegram(
         if (mode !== "text") {
           mode = await switchMode("text");
         }
-        accumulated += `\n\n[Error: ${event.message}]`;
+        const copy = event.class
+          ? classifyOutcome(event.class).copy
+          : event.message;
+        accumulated += accumulated ? `\n\n_${copy}_` : copy;
       }
     }
   } finally {

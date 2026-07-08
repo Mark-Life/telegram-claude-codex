@@ -1,3 +1,6 @@
+import type { Cause, Queue } from "effect";
+import type { AgentError } from "./errors";
+
 /** Supported coding-agent provider identifiers */
 export type ProviderId = "claude" | "codex";
 
@@ -28,7 +31,10 @@ export type AgentEvent =
       durationMs: number;
       turns: number;
     }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; class?: AgentError };
+
+/** The event queue bridged from an Effect producer fiber to the AsyncGenerator consumer. */
+export type EventQueue = Queue.Queue<AgentEvent, Cause.Done>;
 
 /** Options passed to a provider run, normalized across providers */
 export interface RunOptions {

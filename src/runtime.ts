@@ -1,5 +1,6 @@
 import { BunServices } from "@effect/platform-bun";
 import { Layer, ManagedRuntime } from "effect";
+import { RunRegistry } from "./agent/run-registry";
 import { AppConfig } from "./config";
 import { loggerLayer } from "./logger";
 import { BotService } from "./telegram/bot-service";
@@ -16,11 +17,14 @@ const infraLayer = Layer.mergeAll(
 );
 
 /**
- * Composition root. BotService's requirements are satisfied by infraLayer;
- * provideMerge keeps every service reachable, yielding a self-contained layer
- * suitable for ManagedRuntime.make. Later phases add services here.
+ * Composition root. BotService and RunRegistry requirements are satisfied by
+ * infraLayer; provideMerge keeps every service reachable, yielding a
+ * self-contained layer suitable for ManagedRuntime.make. Later phases add
+ * services here.
  */
-const appLayer = BotService.layer.pipe(Layer.provideMerge(infraLayer));
+const appLayer = Layer.mergeAll(BotService.layer, RunRegistry.layer).pipe(
+  Layer.provideMerge(infraLayer)
+);
 
 /**
  * Long-lived runtime owning the appLayer scope. grammy keeps the process loop;

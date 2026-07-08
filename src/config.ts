@@ -41,6 +41,10 @@ const load = Effect.gen(function* () {
   // Option.none => unbounded; set RUN_TIMEOUT_MS to opt back into a cap.
   const runTimeoutMs = yield* Config.option(Config.int("RUN_TIMEOUT_MS"));
 
+  const maxConcurrentRuns = yield* Config.int("MAX_CONCURRENT_RUNS").pipe(
+    Config.withDefault(4)
+  );
+
   return {
     botToken,
     allowedUserId,
@@ -50,6 +54,7 @@ const load = Effect.gen(function* () {
     draftIntervalMs,
     splitAt,
     runTimeoutMs,
+    maxConcurrentRuns,
   } as const;
 });
 

@@ -51,7 +51,7 @@ const shutdown = async () => {
   if (cleanupTimer) {
     clearInterval(cleanupTimer);
   }
-  stopAll();
+  await stopAll();
   // Disposing the runtime runs BotService's finalizer (bot.stop()) exactly once.
   await runtime.dispose();
   process.exit(0);
