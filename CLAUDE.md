@@ -48,6 +48,19 @@ User message → bot.ts (access control + routing)
 - **Provider abstraction**: Each provider is an `AgentProvider` (spec + capabilities + history reader) in the registry. The generic `runner.ts` spawns it and emits normalized `AgentEvent`s — the seam that decouples bot.ts/telegram.ts from any specific CLI. UI features are gated on `getCapabilities(activeProvider)` (e.g. Codex shows duration only, no cost/turns; shows thinking; hides subagents).
 - **Session continuity**: Session IDs stored per provider per project in user state. Follow-up messages resume the same conversation for the active provider.
 - **One process per user**: Global, across providers — a new prompt (or a `/provider` switch) aborts any running process for that user.
-- **Plan mode (organic, no `/plan` command)**: Both providers support plan mode via path conventions. Claude uses `.claude/plans/` + `ExitPlanMode`; Codex is taught the `.codex/plans/PLAN.md` convention via its injected prompt prefix. Either emits `plan_ready`, feeding the same downstream review/approve UI.
 - **Streaming**: AsyncGenerator pattern — the runner yields events, telegram.ts consumes and streams via `sendMessageDraft` (with edit-based fallback). Draft support auto-detected on first event.
 - **HTML formatting**: Markdown converted via regex with placeholder system — code blocks extracted first to avoid nested regex conflicts, then reinserted after other transformations.
+
+
+## Local Effect Source
+
+Two Effect checkouts are cloned locally for reference (we're mid-transition, so both matter):
+
+- **v3** (current stable): `~/.local/share/effect-solutions/effect` — `effect@3.21.0`, the main `Effect-TS/effect` repo.
+- **v4** (smol / next): `~/.local/share/effect-solutions/effect-smol` — `effect@4.0.0-beta.x`, the `Effect-TS/effect-smol` repo.
+
+Use these to explore APIs, find usage examples, and understand implementation details when the documentation isn't enough. Check the version that matches the code you're touching; when in doubt, consult both.
+
+## Code Quality:
+
+When writing or reviewing TypeScript/full-stack code, follow the `quality-code` skill (`.agents/skills/quality-code/SKILL.md`). It loads on demand — invoke it for the full standards.
