@@ -1,6 +1,12 @@
 import { type SpawnOptions, type Subprocess, spawn } from "bun";
 import { Duration, Effect, Fiber, Queue } from "effect";
-import { ProcessFailed, ProviderCrashed } from "./errors";
+import {
+  type AgentError,
+  AgentInterrupted,
+  AgentTimedOut,
+  ProcessFailed,
+  ProviderCrashed,
+} from "./errors";
 import type { EventQueue, ProviderSpec, RunOptions } from "./types";
 
 const STDERR_CAP = 64 * 1024;
@@ -77,7 +83,7 @@ const drainStderr = (proc: PipedSubprocess, state: { value: string }) =>
  * via the fiber's Cause, never surfaced here as an exit code.
  */
 export const spawnAndStream = (
-  spec: ProviderSpec,
+  spec: Extract<ProviderSpec, { kind: "cli" }>,
   opts: RunOptions,
   queue: EventQueue
 ) =>
@@ -160,4 +166,68 @@ export const spawnAndStream = (
       code: exitCode,
       stderr: stderrState.value,
     });
+  });
+
+/** An SDK provider's already-tagged error is preserved; anything else crashes. */
+const isAgentError = (e: unknown): e is AgentError =>
+  e instanceof AgentInterrupted ||
+  e instanceof AgentTimedOut ||
+  e instanceof ProcessFailed ||
+  e instanceof ProviderCrashed;
+
+/**
+ * Aborts the controller and closes the generator within the kill grace. Total,
+ * so it is safe as an acquireRelease finalizer: on scope-close OR interrupt the
+ * SDK's own subprocess is torn down (mirrors killBounded for the CLI path).
+ */
+const teardownSdk = (ac: AbortController, gen: AsyncGenerator<unknown>) =>
+  Effect.sync(() => ac.abort()).pipe(
+    Effect.andThen(
+      Effect.tryPromise(() => gen.return(undefined)).pipe(
+        Effect.timeout(KILL_GRACE),
+        Effect.ignore
+      )
+    )
+  );
+
+/**
+ * Drives an SDK provider's AsyncGenerator as a scoped resource, offering each
+ * normalized event to `queue`. A fresh AbortController is wired into spec.run;
+ * scope-close (normal end OR interrupt) aborts it and returns the generator, so
+ * the SDK subprocess is always torn down on /stop, provider-switch, or a new
+ * prompt. Never reads exit codes (the SDK owns its subprocess). Interruption
+ * surfaces as the fiber's interrupt Cause, so RunRegistry maps it to
+ * AgentInterrupted exactly like the CLI path. An error thrown by the generator
+ * that is already a tagged AgentError is preserved; anything else becomes
+ * ProviderCrashed.
+ */
+export const streamProvider = (
+  spec: Extract<ProviderSpec, { kind: "sdk" }>,
+  opts: RunOptions,
+  queue: EventQueue
+) =>
+  Effect.gen(function* () {
+    const { gen } = yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        const ac = new AbortController();
+        return { ac, gen: spec.run(opts, ac.signal) };
+      }),
+      ({ ac, gen }) => teardownSdk(ac, gen)
+    );
+
+    while (true) {
+      const chunk = yield* Effect.tryPromise({
+        try: () => gen.next(),
+        catch: (e) =>
+          isAgentError(e)
+            ? e
+            : new ProviderCrashed({
+                message: e instanceof Error ? e.message : String(e),
+              }),
+      });
+      if (chunk.done) {
+        break;
+      }
+      yield* Queue.offer(queue, chunk.value);
+    }
   });

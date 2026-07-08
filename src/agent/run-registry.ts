@@ -19,7 +19,7 @@ import {
   type InterruptReason,
   ProviderCrashed,
 } from "./errors";
-import { spawnAndStream } from "./runner";
+import { spawnAndStream, streamProvider } from "./runner";
 import type { AgentEvent, EventQueue, ProviderSpec, RunOptions } from "./types";
 
 /** Upper bound on shutdown drain (parallel per-fiber kill grace is ~3s). */
@@ -72,17 +72,22 @@ const make = Effect.gen(function* () {
     spec: ProviderSpec,
     opts: RunOptions,
     queue: EventQueue
-  ) =>
-    Semaphore.withPermitsIfAvailable(
+  ) => {
+    const producer =
+      spec.kind === "sdk"
+        ? streamProvider(spec, opts, queue)
+        : spawnAndStream(spec, opts, queue);
+    return Semaphore.withPermitsIfAvailable(
       sem,
       1
-    )(spawnAndStream(spec, opts, queue).pipe(Effect.scoped)).pipe(
+    )(producer.pipe(Effect.scoped)).pipe(
       Effect.flatMap((ran) =>
         Option.isSome(ran) ? Effect.void : new AtCapacity({})
       ),
       Effect.onExit((exit) => emitTerminal(queue, exit, opts.userId)),
       Effect.annotateLogs({ userId: opts.userId, provider: spec.id })
     );
+  };
 
   /**
    * Starts a run for a user: creates the bridge queue, records the pre-empt

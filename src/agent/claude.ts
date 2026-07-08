@@ -1,79 +1,32 @@
 import {
+  type Options,
+  query,
+  type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import {
   clearSessionCache,
   getSessionProject,
   listAllSessions,
 } from "./claude-history";
 import type { AgentEvent, AgentProvider, RunOptions } from "./types";
 
-type ContentBlockStart =
-  | { type: "text"; text: string }
-  | {
-      type: "tool_use";
-      id: string;
-      name: string;
-      input: Record<string, unknown>;
-    }
-  | { type: "thinking"; thinking: string };
-
-type ContentBlockDelta =
-  | { type: "text_delta"; text: string }
-  | { type: "input_json_delta"; partial_json: string }
-  | { type: "thinking_delta"; thinking: string }
-  | { type: "signature_delta"; signature: string };
-
-type StreamEvent =
-  | { type: "system"; subtype: "init"; session_id: string }
-  | {
-      type: "system";
-      subtype: "task_started";
-      task_id: string;
-      description: string;
-    }
-  | {
-      type: "system";
-      subtype: "task_notification";
-      task_id: string;
-      status: string;
-      summary: string;
-      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
-    }
-  | {
-      type: "stream_event";
-      event: {
-        type: "content_block_start";
-        index: number;
-        content_block: ContentBlockStart;
-      };
-    }
-  | {
-      type: "stream_event";
-      event: {
-        type: "content_block_delta";
-        index: number;
-        delta: ContentBlockDelta;
-      };
-    }
-  | {
-      type: "stream_event";
-      event: { type: "content_block_stop"; index: number };
-    }
-  | { type: "stream_event"; event: { type: string } }
-  | {
-      type: "assistant";
-      message: { content: Array<{ type: string; text?: string }> };
-      session_id: string;
-    }
-  | {
-      type: "result";
-      subtype: string;
-      is_error: boolean;
-      result: string;
-      session_id: string;
-      total_cost_usd: number;
-      duration_ms: number;
-      num_turns: number;
-      usage?: { total_tokens?: number };
-    };
+/** The raw Anthropic stream event carried by an SDK partial-assistant message. */
+type StreamEvent = Extract<SDKMessage, { type: "stream_event" }>["event"];
+type ContentBlockStart = Extract<
+  StreamEvent,
+  { type: "content_block_start" }
+>["content_block"];
+type ContentBlockDelta = Extract<
+  StreamEvent,
+  { type: "content_block_delta" }
+>["delta"];
+/** One content block of a complete (non-partial) assistant message. */
+type AssistantBlock = Extract<
+  SDKMessage,
+  { type: "assistant" }
+>["message"]["content"][number];
+type SystemMessage = Extract<SDKMessage, { type: "system" }>;
+type ResultMessage = Extract<SDKMessage, { type: "result" }>;
 
 /** Field on a tool's input that holds its short human-readable summary */
 const TOOL_INPUT_FIELD: Record<string, string> = {
@@ -91,61 +44,61 @@ const TOOL_INPUT_FIELD: Record<string, string> = {
 const truncate = (value: string, max: number) =>
   value.length > max ? `${value.slice(0, max - 3)}...` : value;
 
-/** Format tool input into a short description */
-function formatToolInput(name: string, input: Record<string, unknown>) {
+/** Format a tool's (already-parsed) input object into a short description */
+const formatToolInput = (name: string, input: Record<string, unknown>) => {
   if (name === "Bash") {
     return truncate(input.command ? String(input.command) : "", 80);
   }
   const field = TOOL_INPUT_FIELD[name];
   return field && input[field] ? String(input[field]) : "";
-}
+};
 
-/** Mutable state threaded through the stream-json parser */
+/** Sum the token counts on a result usage object; undefined when none present. */
+const totalTokensFrom = (usage: ResultMessage["usage"]) => {
+  const counts = [
+    usage.input_tokens,
+    usage.output_tokens,
+    usage.cache_creation_input_tokens,
+    usage.cache_read_input_tokens,
+  ].filter((n): n is number => typeof n === "number" && Number.isFinite(n));
+  return counts.length > 0 ? counts.reduce((a, b) => a + b, 0) : undefined;
+};
+
+/**
+ * Mutable state threaded through the partial-message parser: which block type is
+ * currently open (to route deltas), the thinking block's wall-clock start (the
+ * SDK reports no thinking duration), and the last `.claude/plans/` write seen
+ * (the planPath surfaced when ExitPlanMode fires).
+ */
 interface ParserState {
-  currentBlockType: "text" | "tool_use" | "thinking" | null;
-  currentToolName: string;
-  hasEmittedContent: boolean;
+  currentBlockType: "text" | "thinking" | null;
   lastPlanPath: string;
   thinkingStartTime: number;
-  toolInputJson: string;
 }
 
-type StreamEventInner = Extract<StreamEvent, { type: "stream_event" }>["event"];
-type SystemEvent = Extract<StreamEvent, { type: "system" }>;
-type ResultEvent = Extract<StreamEvent, { type: "result" }>;
-
-/** Handle a content_block_start event, updating block-tracking state */
+/** Open a text/thinking block; other block types reset routing (deltas ignored). */
 function* handleContentBlockStart(
   state: ParserState,
   block: ContentBlockStart
 ): Generator<AgentEvent> {
   if (block.type === "text") {
     state.currentBlockType = "text";
-  } else if (block.type === "tool_use") {
-    state.currentBlockType = "tool_use";
-    state.currentToolName = block.name;
-    state.toolInputJson = "";
   } else if (block.type === "thinking") {
     state.currentBlockType = "thinking";
     state.thinkingStartTime = Date.now();
-    state.hasEmittedContent = true;
     yield { kind: "thinking_start" };
+  } else {
+    state.currentBlockType = null;
   }
 }
 
-/** Handle a content_block_delta event for the current block type */
+/** Route a content_block_delta to the open block's stream. */
 function* handleContentBlockDelta(
   state: ParserState,
   delta: ContentBlockDelta
 ): Generator<AgentEvent> {
   if (delta.type === "text_delta" && state.currentBlockType === "text") {
-    state.hasEmittedContent = true;
     yield { kind: "text_delta", text: delta.text };
-  } else if (
-    delta.type === "input_json_delta" &&
-    state.currentBlockType === "tool_use"
-  ) {
-    state.toolInputJson += delta.partial_json;
   } else if (
     delta.type === "thinking_delta" &&
     state.currentBlockType === "thinking" &&
@@ -153,181 +106,205 @@ function* handleContentBlockDelta(
   ) {
     yield { kind: "thinking_delta", text: delta.thinking };
   }
-  // signature_delta: ignored
+  // input_json_delta / signature_delta: ignored (tool input comes from the
+  // complete assistant message, which already carries a parsed input object).
 }
 
-/** Emit tool_use (and any plan_ready) events when a tool block completes */
-function* handleToolUseStop(state: ParserState): Generator<AgentEvent> {
-  let input: Record<string, unknown> = {};
-  try {
-    input = JSON.parse(state.toolInputJson);
-  } catch {
-    // partial/invalid tool JSON; fall back to empty input
-  }
-  const shortInput = formatToolInput(state.currentToolName, input);
-  state.hasEmittedContent = true;
-  yield { kind: "tool_use", name: state.currentToolName, input: shortInput };
-  if (
-    state.currentToolName === "Write" &&
-    typeof input.file_path === "string" &&
-    input.file_path.includes(".claude/plans/")
-  ) {
-    state.lastPlanPath = input.file_path;
-  }
-  if (state.currentToolName === "ExitPlanMode" && state.lastPlanPath) {
-    yield { kind: "plan_ready", planPath: state.lastPlanPath };
-    state.lastPlanPath = "";
-  }
-}
-
-/** Handle a content_block_stop event, closing out the current block */
+/** Close the open block, emitting thinking_done with the measured duration. */
 function* handleContentBlockStop(state: ParserState): Generator<AgentEvent> {
-  if (state.currentBlockType === "tool_use") {
-    yield* handleToolUseStop(state);
-  } else if (state.currentBlockType === "thinking") {
-    const elapsed = Date.now() - state.thinkingStartTime;
-    yield { kind: "thinking_done", durationMs: elapsed };
+  if (state.currentBlockType === "thinking") {
+    yield {
+      kind: "thinking_done",
+      durationMs: Date.now() - state.thinkingStartTime,
+    };
   }
   state.currentBlockType = null;
 }
 
-/** Dispatch a stream_event's inner event to the matching block handler */
-function* handleStreamEvent(
+/** Dispatch a partial-message stream event to the matching block handler. */
+function* handlePartialEvent(
   state: ParserState,
-  event: StreamEventInner
+  event: StreamEvent
 ): Generator<AgentEvent> {
-  if (event.type === "content_block_start" && "content_block" in event) {
+  if (event.type === "content_block_start") {
     yield* handleContentBlockStart(state, event.content_block);
-  } else if (event.type === "content_block_delta" && "delta" in event) {
+  } else if (event.type === "content_block_delta") {
     yield* handleContentBlockDelta(state, event.delta);
   } else if (event.type === "content_block_stop") {
     yield* handleContentBlockStop(state);
   }
 }
 
-/** Translate a system event (init/task lifecycle) into AgentEvents */
-function* handleSystemEvent(parsed: SystemEvent): Generator<AgentEvent> {
-  if (parsed.subtype === "init") {
-    yield { kind: "session_init", sessionId: parsed.session_id };
-  } else if (parsed.subtype === "task_started") {
+/** Emit tool_use for a completed tool block and track the plan-ready convention. */
+function* handleToolUseBlock(
+  state: ParserState,
+  block: Extract<AssistantBlock, { type: "tool_use" }>
+): Generator<AgentEvent> {
+  const input = (block.input ?? {}) as Record<string, unknown>;
+  yield {
+    kind: "tool_use",
+    name: block.name,
+    input: formatToolInput(block.name, input),
+  };
+  if (
+    block.name === "Write" &&
+    typeof input.file_path === "string" &&
+    input.file_path.includes(".claude/plans/")
+  ) {
+    state.lastPlanPath = input.file_path;
+  }
+  if (block.name === "ExitPlanMode" && state.lastPlanPath) {
+    yield { kind: "plan_ready", planPath: state.lastPlanPath };
+    state.lastPlanPath = "";
+  }
+}
+
+/**
+ * Map a complete assistant message's content blocks. tool_use (and plan_ready)
+ * always emit here; text/thinking are only emitted as a fallback when no partial
+ * stream was seen, since the streamed deltas already carried them.
+ */
+function* handleAssistantBlocks(
+  state: ParserState,
+  content: AssistantBlock[],
+  sawStreamEvents: boolean
+): Generator<AgentEvent> {
+  for (const block of content) {
+    if (block.type === "tool_use") {
+      yield* handleToolUseBlock(state, block);
+    } else if (!sawStreamEvents && block.type === "text" && block.text) {
+      yield { kind: "text_delta", text: block.text };
+    } else if (!sawStreamEvents && block.type === "thinking") {
+      yield { kind: "thinking_start" };
+      if (block.thinking) {
+        yield { kind: "thinking_delta", text: block.thinking };
+      }
+      yield { kind: "thinking_done", durationMs: 0 };
+    }
+  }
+}
+
+/** Translate a system message (init + subagent task lifecycle) into events. */
+function* handleSystemMessage(msg: SystemMessage): Generator<AgentEvent> {
+  if (msg.subtype === "init") {
+    yield { kind: "session_init", sessionId: msg.session_id };
+  } else if (msg.subtype === "task_started" && !msg.skip_transcript) {
     yield {
       kind: "agent_started",
-      taskId: parsed.task_id,
-      description: parsed.description,
+      taskId: msg.task_id,
+      description: msg.description,
     };
-  } else if (parsed.subtype === "task_notification") {
+  } else if (msg.subtype === "task_notification") {
     yield {
       kind: "agent_done",
-      taskId: parsed.task_id,
-      description: parsed.summary,
-      status: parsed.status,
-      durationMs: parsed.usage?.duration_ms,
-      totalTokens: parsed.usage?.total_tokens,
-      toolUses: parsed.usage?.tool_uses,
+      taskId: msg.task_id,
+      description: msg.summary,
+      status: msg.status,
+      durationMs: msg.usage?.duration_ms,
+      totalTokens: msg.usage?.total_tokens,
+      toolUses: msg.usage?.tool_uses,
     };
   }
 }
 
-/** Map a final result event into a normalized result AgentEvent */
-const toResultEvent = (parsed: ResultEvent): AgentEvent => ({
-  kind: "result",
-  text: parsed.result,
-  sessionId: parsed.session_id,
-  cost: parsed.total_cost_usd,
-  durationMs: parsed.duration_ms,
-  turns: parsed.num_turns,
-  totalTokens: parsed.usage?.total_tokens,
-});
-
-/** Route a single parsed stream event to its handler */
-function* dispatchEvent(
-  state: ParserState,
-  parsed: StreamEvent
-): Generator<AgentEvent> {
-  if (parsed.type === "stream_event") {
-    yield* handleStreamEvent(state, parsed.event);
-  } else if (parsed.type === "system") {
-    yield* handleSystemEvent(parsed);
-  } else if (parsed.type === "result") {
-    yield toResultEvent(parsed);
+/**
+ * Map a terminal result message. The success variant carries the result text;
+ * error variants carry no text and additionally surface an `error` event. Cost
+ * degrades to undefined (never a fabricated 0) when the SDK omits it.
+ */
+function* handleResultMessage(msg: ResultMessage): Generator<AgentEvent> {
+  yield {
+    kind: "result",
+    text: msg.subtype === "success" ? msg.result : "",
+    sessionId: msg.session_id,
+    cost: Number.isFinite(msg.total_cost_usd) ? msg.total_cost_usd : undefined,
+    durationMs: msg.duration_ms,
+    turns: msg.num_turns,
+    totalTokens: totalTokensFrom(msg.usage),
+  };
+  if (msg.subtype !== "success") {
+    yield { kind: "error", message: msg.errors.join("; ") || msg.subtype };
   }
-}
-
-/** Create a stateful stream-json parser */
-function createStreamParser() {
-  const state: ParserState = {
-    hasEmittedContent: false,
-    currentBlockType: null,
-    currentToolName: "",
-    toolInputJson: "",
-    thinkingStartTime: 0,
-    lastPlanPath: "",
-  };
-
-  return function* parseStreamLines(lines: string[]): Generator<AgentEvent> {
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-
-      let parsed: StreamEvent;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        continue;
-      }
-
-      yield* dispatchEvent(state, parsed);
-    }
-  };
 }
 
 const SCRIPT_DIR = new URL("../../scripts", import.meta.url).pathname;
 
-/** Build system prompt snippet telling Claude how to send files to the user */
-function buildFileSystemPrompt() {
+/** Build the system-prompt snippet telling Claude how to send files to `chatId`. */
+const buildFileSystemPrompt = (chatId: number) => {
   const scriptPath = `${SCRIPT_DIR}/send-file-to-user.ts`;
   return [
     "You can send files to the user's Telegram chat.",
-    `To send a file, run: bun ${scriptPath} <absolute-file-path>`,
+    `To send a file, run: bun ${scriptPath} --path <absolute-file-path> --chat ${chatId}`,
     "Only use this when the user explicitly asks you to send/share/download a file.",
     "The script blocks .env and other sensitive files automatically.",
   ].join(" ");
-}
+};
 
-/** Build the claude CLI arguments for a run */
-function buildArgs(opts: RunOptions) {
-  const args = [
-    "-p",
-    opts.prompt,
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--include-partial-messages",
-    "--dangerously-skip-permissions",
-    "--append-system-prompt",
-    buildFileSystemPrompt(),
-  ];
+/**
+ * Build the pure `query()` params for a run. Keeps Claude Code's default system
+ * prompt (preset) with the file-send instructions appended, streams partial
+ * messages for token-level text/thinking, and wires a fresh AbortController to
+ * the caller's signal so the runner's scope-close tears the SDK subprocess down.
+ * No apiKey is set: subscription/local auth stays the default.
+ */
+const buildQuery = (opts: RunOptions, signal: AbortSignal) => {
+  const abortController = new AbortController();
+  signal.addEventListener("abort", () => abortController.abort(), {
+    once: true,
+  });
+  const options: Options = {
+    cwd: opts.projectDir,
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    abortController,
+    includePartialMessages: true,
+    systemPrompt: {
+      type: "preset",
+      preset: "claude_code",
+      append: buildFileSystemPrompt(opts.chatId),
+    },
+  };
   if (opts.sessionId) {
-    args.push("-r", opts.sessionId);
+    options.resume = opts.sessionId;
   }
-  return args;
+  return { prompt: opts.prompt, options };
+};
+
+/**
+ * Drive the Claude Agent SDK for one run, normalizing its message stream into
+ * AgentEvents. Text/thinking are sourced from streamed partial messages;
+ * tool_use and plan_ready from the complete assistant messages; subagent
+ * lifecycle from task_started/task_notification system messages.
+ */
+async function* run(
+  opts: RunOptions,
+  signal: AbortSignal
+): AsyncGenerator<AgentEvent> {
+  const state: ParserState = {
+    currentBlockType: null,
+    lastPlanPath: "",
+    thinkingStartTime: 0,
+  };
+  let sawStreamEvents = false;
+
+  for await (const msg of query(buildQuery(opts, signal))) {
+    if (msg.type === "stream_event") {
+      sawStreamEvents = true;
+      yield* handlePartialEvent(state, msg.event);
+    } else if (msg.type === "assistant") {
+      yield* handleAssistantBlocks(state, msg.message.content, sawStreamEvents);
+    } else if (msg.type === "result") {
+      yield* handleResultMessage(msg);
+    } else if (msg.type === "system") {
+      yield* handleSystemMessage(msg);
+    }
+  }
 }
 
-/** Build the claude CLI environment: strip CLAUDECODE, inject TELEGRAM_CHAT_ID */
-function buildEnv(opts: RunOptions, base: Record<string, string | undefined>) {
-  const { CLAUDECODE: _, ...restEnv } = base;
-  return { ...restEnv, TELEGRAM_CHAT_ID: String(opts.chatId) } as Record<
-    string,
-    string
-  >;
-}
-
-/** Claude Code provider definition */
+/** Claude Code provider definition (Agent SDK) */
 export const claudeProvider: AgentProvider = {
   id: "claude",
-  command: "claude",
+  kind: "sdk",
   displayName: "Claude Code",
   capabilities: {
     planMode: true,
@@ -335,9 +312,7 @@ export const claudeProvider: AgentProvider = {
     cost: true,
     subagents: true,
   },
-  buildArgs,
-  buildEnv,
-  createParser: createStreamParser,
+  run,
   listAllSessions,
   getSessionProject,
   clearSessionCache,

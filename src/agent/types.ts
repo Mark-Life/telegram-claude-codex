@@ -67,23 +67,37 @@ export interface SessionInfo {
   summary: string;
 }
 
-/** Minimal contract the generic runner needs to spawn and parse a provider */
-export interface ProviderSpec {
-  buildArgs: (opts: RunOptions) => string[];
-  buildEnv: (
-    opts: RunOptions,
-    base: Record<string, string | undefined>
-  ) => Record<string, string>;
-  command: string;
-  createParser: () => (lines: string[]) => Generator<AgentEvent>;
-  id: ProviderId;
-}
+/**
+ * Minimal contract the generic runner needs to run a provider. A `cli` provider
+ * is spawned as a child process and its stdout parsed line-by-line; an `sdk`
+ * provider owns its own subprocess and yields normalized events directly.
+ */
+export type ProviderSpec =
+  | {
+      id: ProviderId;
+      kind: "cli";
+      command: string;
+      buildArgs: (opts: RunOptions) => string[];
+      buildEnv: (
+        opts: RunOptions,
+        base: Record<string, string | undefined>
+      ) => Record<string, string>;
+      createParser: () => (lines: string[]) => Generator<AgentEvent>;
+    }
+  | {
+      id: ProviderId;
+      kind: "sdk";
+      run: (
+        opts: RunOptions,
+        signal: AbortSignal
+      ) => AsyncGenerator<AgentEvent>;
+    };
 
 /** Full provider definition: spec plus capabilities and session history access */
-export interface AgentProvider extends ProviderSpec {
+export type AgentProvider = ProviderSpec & {
   capabilities: ProviderCapabilities;
   clearSessionCache: () => void;
   displayName: string;
   getSessionProject: (sessionId: string) => string | undefined;
   listAllSessions: () => SessionInfo[];
-}
+};

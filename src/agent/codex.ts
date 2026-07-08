@@ -333,6 +333,7 @@ const buildEnv = (
 /** Codex provider definition */
 export const codexProvider: AgentProvider = {
   id: "codex",
+  kind: "cli",
   command: "codex",
   displayName: "Codex",
   capabilities: {

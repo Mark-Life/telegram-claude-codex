@@ -43,6 +43,7 @@ const makeRuntime = (maxConcurrentRuns: number) => {
  */
 const makeSpec = (script: string): ProviderSpec => ({
   id: "claude",
+  kind: "cli",
   command: "/bin/sh",
   buildArgs: () => ["-c", script],
   buildEnv: () => ({}),
