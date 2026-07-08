@@ -82,7 +82,7 @@ function registerShutdownHandlers() {
 
 async function main() {
   const cfg = await initConfig();
-  const defaultRepoShort = repoShortName(cfg.repos[0].repo);
+  const defaultRepoShort = repoShortName(cfg.repos[0]?.repo ?? "");
 
   // Handle --reset (local-only)
   if (values.reset) {

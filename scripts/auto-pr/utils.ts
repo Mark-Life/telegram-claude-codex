@@ -346,13 +346,13 @@ export function buildContextFromArtifacts(
 
   const content = readFileSync(ramblingsPath, "utf-8");
   const titleMatch = content.match(/^# (.+)$/m);
-  const title = titleMatch ? titleMatch[1] : `Issue #${issueNumber}`;
+  const title = titleMatch?.[1] ?? `Issue #${issueNumber}`;
 
   const lines = content.split("\n");
   let blankCount = 0;
   let bodyStartIndex = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === "") {
+    if (lines[i]?.trim() === "") {
       blankCount++;
       if (blankCount === 2) {
         bodyStartIndex = i + 1;

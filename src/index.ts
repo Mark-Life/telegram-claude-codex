@@ -1,8 +1,11 @@
 import { spawn } from "bun";
 import { stopAll } from "./agent";
 import { getProvider } from "./agent/registry";
-import { cleanupStaleState, createBot } from "./bot";
+import { cleanupStaleState } from "./bot";
+import { AppConfig } from "./config";
+import { runtime } from "./runtime";
 import { loadPersistedState } from "./state";
+import { BotService } from "./telegram/bot-service";
 
 /** Warn (but never block startup) if the Codex CLI is missing or not logged in */
 const checkCodexAvailable = async () => {
@@ -25,33 +28,13 @@ const checkCodexAvailable = async () => {
   }
 };
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const ALLOWED_USER_ID = process.env.ALLOWED_USER_ID;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const PROJECTS_DIR = process.env.PROJECTS_DIR || "/home/agent/projects";
-
-if (!BOT_TOKEN) {
-  console.error("Missing BOT_TOKEN env var");
-  process.exit(1);
-}
-if (!ALLOWED_USER_ID) {
-  console.error("Missing ALLOWED_USER_ID env var");
-  process.exit(1);
-}
-if (!GROQ_API_KEY) {
-  console.error("Missing GROQ_API_KEY env var");
-  process.exit(1);
-}
-
-const userId = Number.parseInt(ALLOWED_USER_ID, 10);
-if (Number.isNaN(userId)) {
-  console.error("ALLOWED_USER_ID must be a number");
-  process.exit(1);
-}
-
 const CLEANUP_INTERVAL = 3 * 60 * 60 * 1000;
 
-const bot = createBot(BOT_TOKEN, userId, PROJECTS_DIR);
+// Boot config through the runtime — fails fast on missing/invalid env, parity
+// with the old inline process.exit checks. Secrets stay redacted.
+const cfg = await runtime.runPromise(AppConfig);
+const { bot } = await runtime.runPromise(BotService);
+const userId = cfg.allowedUserId;
 
 bot.catch((err) => {
   console.error("Bot error:", err);
@@ -59,7 +42,7 @@ bot.catch((err) => {
 
 let shuttingDown = false;
 let cleanupTimer: ReturnType<typeof setInterval> | undefined;
-const shutdown = () => {
+const shutdown = async () => {
   if (shuttingDown) {
     return;
   }
@@ -69,7 +52,8 @@ const shutdown = () => {
     clearInterval(cleanupTimer);
   }
   stopAll();
-  bot.stop();
+  // Disposing the runtime runs BotService's finalizer (bot.stop()) exactly once.
+  await runtime.dispose();
   process.exit(0);
 };
 

@@ -8,9 +8,12 @@
     "lint": "bunx --bun ultracite check",
     "fix": "bunx --bun ultracite fix",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
     "prepare": "husky"
   },
   "dependencies": {
+    "@effect/platform-bun": "4.0.0-beta.78",
+    "effect": "4.0.0-beta.78",
     "execa": "^9.6.1",
     "grammy": "^1.44.0",
     "groq-sdk": "^0.37.0"

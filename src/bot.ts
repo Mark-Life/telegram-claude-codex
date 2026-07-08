@@ -200,7 +200,7 @@ export function createBot(
   const bot = new Bot(token);
 
   // Access control middleware
-  const botId = Number.parseInt(token.split(":")[0], 10);
+  const botId = Number.parseInt(token.split(":")[0] ?? "", 10);
   bot.use(async (ctx, next) => {
     if (!ctx.from || ctx.from.id === botId) {
       return;
@@ -226,10 +226,12 @@ export function createBot(
     const text = ctx.message?.text;
     if (text && text in buttonToCommand) {
       const cmd = buttonToCommand[text];
-      ctx.message!.text = cmd;
-      ctx.message!.entities = [
-        { type: "bot_command", offset: 0, length: cmd.length },
-      ];
+      if (cmd) {
+        ctx.message!.text = cmd;
+        ctx.message!.entities = [
+          { type: "bot_command", offset: 0, length: cmd.length },
+        ];
+      }
     }
     return next();
   });
@@ -351,7 +353,7 @@ export function createBot(
   });
 
   bot.callbackQuery(/^projects:(\d+)$/, async (ctx) => {
-    const page = Number.parseInt(ctx.match?.[1], 10);
+    const page = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const result = buildProjectsMessage(page, projectsDir);
 
     if (!result) {
@@ -364,7 +366,7 @@ export function createBot(
   });
 
   bot.callbackQuery(/^project:(.+)$/, async (ctx) => {
-    const name = ctx.match?.[1];
+    const name = ctx.match?.[1] ?? "";
     const isGeneral = name === "__general__";
     const fullPath = isGeneral ? projectsDir : join(projectsDir, name);
     const displayName = isGeneral ? "general (all projects)" : name;
@@ -632,14 +634,14 @@ export function createBot(
   });
 
   bot.callbackQuery(/^compose_send:(\d+)$/, async (ctx) => {
-    const userId = Number.parseInt(ctx.match?.[1], 10);
+    const userId = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const state = getState(userId);
     await ctx.answerCallbackQuery();
     await executeSend(ctx, state);
   });
 
   bot.callbackQuery(/^compose_cancel:(\d+)$/, async (ctx) => {
-    const userId = Number.parseInt(ctx.match?.[1], 10);
+    const userId = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const state = getState(userId);
     await ctx.answerCallbackQuery();
     await executeCancel(ctx, state);
@@ -709,7 +711,7 @@ export function createBot(
   });
 
   bot.callbackQuery(/^history:(\d+)$/, async (ctx) => {
-    const page = Number.parseInt(ctx.match?.[1], 10);
+    const page = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const state = getState(ctx.from.id);
     const result = buildHistoryMessage(page, state.activeProvider);
 
@@ -726,7 +728,7 @@ export function createBot(
   });
 
   bot.callbackQuery(/^session:(.+)$/, async (ctx) => {
-    const sessionId = ctx.match?.[1];
+    const sessionId = ctx.match?.[1] ?? "";
     const state = getState(ctx.from.id);
 
     const cachedProject = getSessionProject(state.activeProvider, sessionId);
