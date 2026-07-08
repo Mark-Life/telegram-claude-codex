@@ -88,16 +88,148 @@ const parseErrorMessage = (raw: string) => {
 };
 
 /**
+ * Mutable state carried across the lifetime of one Codex run: wall-clock start
+ * (run duration), thread id (Codex session id), last assistant message (result
+ * text), last surfaced error (dedupe), and whether plan_ready was emitted.
+ */
+interface CodexParserState {
+  lastAgentMessage: string;
+  lastError: string;
+  planEmitted: boolean;
+  sessionId: string;
+  start: number;
+}
+
+/** Yield an `error` event only if the message differs from the last one seen */
+function* emitErrorOnce(
+  msg: string,
+  state: CodexParserState
+): Generator<AgentEvent> {
+  if (msg !== state.lastError) {
+    state.lastError = msg;
+    yield { kind: "error", message: msg };
+  }
+}
+
+/**
+ * Translate a completed `file_change` item's changes into events. A write to
+ * `.codex/plans/` is the plan-ready signal (mirrors claude.ts's `.claude/plans/`
+ * check): emit plan_ready at most once per run and skip the noisy tool_use line.
+ */
+function* handleFileChanges(
+  changes: FileChange[],
+  state: CodexParserState
+): Generator<AgentEvent> {
+  for (const change of changes) {
+    if (change.path.includes(".codex/plans/")) {
+      if (!state.planEmitted) {
+        state.planEmitted = true;
+        yield { kind: "plan_ready", planPath: change.path };
+      }
+      continue;
+    }
+    yield {
+      kind: "tool_use",
+      name: change.kind === "add" ? "Write" : "Edit",
+      input: change.path,
+    };
+  }
+}
+
+/** Translate a completed `reasoning` item into a thinking event triple */
+function* handleReasoning(text: string): Generator<AgentEvent> {
+  if (!text) {
+    return;
+  }
+  yield { kind: "thinking_start" };
+  yield { kind: "thinking_delta", text };
+  yield { kind: "thinking_done", durationMs: 0 };
+}
+
+/**
+ * Translate a Codex item into normalized events. Only completed items produce
+ * output — command/file lines emit once on completion (status/exit known) to
+ * avoid duplicate tool lines.
+ */
+function* handleItem(
+  item: CodexItem,
+  isCompleted: boolean,
+  state: CodexParserState
+): Generator<AgentEvent> {
+  if (!isCompleted) {
+    return;
+  }
+  if (item.type === "agent_message") {
+    const { text } = item as AgentMessageItem;
+    state.lastAgentMessage = text;
+    yield { kind: "text_delta", text };
+  } else if (item.type === "command_execution") {
+    const { command } = item as CommandExecutionItem;
+    yield { kind: "tool_use", name: "Bash", input: stripZshWrapper(command) };
+  } else if (item.type === "file_change") {
+    yield* handleFileChanges((item as FileChangeItem).changes, state);
+  } else if (item.type === "reasoning") {
+    yield* handleReasoning((item as ReasoningItem).text);
+  }
+}
+
+/**
+ * Dispatch a single parsed Codex event to normalized events. turn.started,
+ * item.started (non-command/file), and unknown types are ignored.
+ */
+function* handleCodexEvent(
+  parsed: CodexEvent,
+  state: CodexParserState
+): Generator<AgentEvent> {
+  if (parsed.type === "thread.started" && "thread_id" in parsed) {
+    state.sessionId = parsed.thread_id;
+    yield { kind: "session_init", sessionId: state.sessionId };
+    return;
+  }
+  if (
+    (parsed.type === "item.started" || parsed.type === "item.completed") &&
+    "item" in parsed
+  ) {
+    yield* handleItem(parsed.item, parsed.type === "item.completed", state);
+    return;
+  }
+  if (parsed.type === "turn.completed") {
+    yield {
+      kind: "result",
+      text: state.lastAgentMessage,
+      sessionId: state.sessionId,
+      cost: 0,
+      durationMs: Date.now() - state.start,
+      turns: 0,
+    };
+    return;
+  }
+  // `error` and `turn.failed` carry the same message — emit once via dedupe
+  if (parsed.type === "turn.failed" && "error" in parsed) {
+    yield* emitErrorOnce(
+      parseErrorMessage(parsed.error?.message ?? "Turn failed"),
+      state
+    );
+    return;
+  }
+  if (parsed.type === "error" && "message" in parsed) {
+    yield* emitErrorOnce(parseErrorMessage(parsed.message ?? "Error"), state);
+  }
+}
+
+/**
  * Create a stateful parser for the `codex exec --json` stdout stream.
  * The closure captures wall-clock start time (run duration), the thread id
  * (Codex session id), and the last assistant message (result text).
  */
 const createCodexParser = () => {
-  const start = Date.now();
-  let sessionId = "";
-  let lastAgentMessage = "";
-  let lastError = "";
-  let planEmitted = false;
+  const state: CodexParserState = {
+    start: Date.now(),
+    sessionId: "",
+    lastAgentMessage: "",
+    lastError: "",
+    planEmitted: false,
+  };
 
   return function* parseCodexLines(lines: string[]): Generator<AgentEvent> {
     for (const line of lines) {
@@ -113,74 +245,7 @@ const createCodexParser = () => {
         continue;
       }
 
-      if (parsed.type === "thread.started" && "thread_id" in parsed) {
-        sessionId = parsed.thread_id;
-        yield { kind: "session_init", sessionId };
-      } else if (
-        (parsed.type === "item.started" || parsed.type === "item.completed") &&
-        "item" in parsed
-      ) {
-        const isCompleted = parsed.type === "item.completed";
-        const item = parsed.item;
-
-        if (item.type === "agent_message" && isCompleted) {
-          const text = (item as AgentMessageItem).text;
-          lastAgentMessage = text;
-          yield { kind: "text_delta", text };
-        } else if (item.type === "command_execution" && isCompleted) {
-          // Emit once on completion (status/exit known) to avoid dup tool lines
-          const cmd = (item as CommandExecutionItem).command;
-          yield { kind: "tool_use", name: "Bash", input: stripZshWrapper(cmd) };
-        } else if (item.type === "file_change" && isCompleted) {
-          for (const change of (item as FileChangeItem).changes) {
-            // A write to .codex/plans/ is the plan-ready signal (mirrors
-            // claude.ts's .claude/plans/ check). Emit plan_ready at most once
-            // per run and skip the noisy tool_use line for the plan file.
-            if (change.path.includes(".codex/plans/")) {
-              if (!planEmitted) {
-                planEmitted = true;
-                yield { kind: "plan_ready", planPath: change.path };
-              }
-              continue;
-            }
-            yield {
-              kind: "tool_use",
-              name: change.kind === "add" ? "Write" : "Edit",
-              input: change.path,
-            };
-          }
-        } else if (item.type === "reasoning" && isCompleted) {
-          const text = (item as ReasoningItem).text;
-          if (text) {
-            yield { kind: "thinking_start" };
-            yield { kind: "thinking_delta", text };
-            yield { kind: "thinking_done", durationMs: 0 };
-          }
-        }
-      } else if (parsed.type === "turn.completed") {
-        yield {
-          kind: "result",
-          text: lastAgentMessage,
-          sessionId,
-          cost: 0,
-          durationMs: Date.now() - start,
-          turns: 0,
-        };
-      } else if (parsed.type === "turn.failed" && "error" in parsed) {
-        // `error` and `turn.failed` carry the same message — emit once
-        const msg = parseErrorMessage(parsed.error?.message ?? "Turn failed");
-        if (msg !== lastError) {
-          lastError = msg;
-          yield { kind: "error", message: msg };
-        }
-      } else if (parsed.type === "error" && "message" in parsed) {
-        const msg = parseErrorMessage(parsed.message ?? "Error");
-        if (msg !== lastError) {
-          lastError = msg;
-          yield { kind: "error", message: msg };
-        }
-      }
-      // turn.started, item.started (non-command/file), and unknown types: ignored
+      yield* handleCodexEvent(parsed, state);
     }
   };
 };

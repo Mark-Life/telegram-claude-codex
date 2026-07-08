@@ -19,7 +19,8 @@ export async function stepRefresh(ctx: IssueContext): Promise<boolean> {
 
   // Ensure branch exists
   const branchList = await git(["branch", "--list", ctx.branch]);
-  if (!branchList.includes(ctx.branch.split("/").pop()!)) {
+  const shortBranch = ctx.branch.split("/").pop() ?? ctx.branch;
+  if (!branchList.includes(shortBranch)) {
     try {
       await git(["fetch", remote, ctx.branch]);
       await git(["checkout", ctx.branch]);
@@ -51,7 +52,9 @@ export async function stepRefresh(ctx: IssueContext): Promise<boolean> {
     try {
       await git(["rebase", mainBranch]);
     } catch {
-      await git(["rebase", "--abort"]).catch(() => {});
+      await git(["rebase", "--abort"]).catch(() => {
+        // No rebase in progress to abort; ignore
+      });
       // Fall back to merge
       try {
         await git(["merge", mainBranch, "--no-edit"]);
@@ -74,7 +77,9 @@ export async function stepRefresh(ctx: IssueContext): Promise<boolean> {
 
   if (result.is_error) {
     console.error(`Refresh step failed: ${result.result}`);
-    await git(["checkout", mainBranch]).catch(() => {});
+    await git(["checkout", mainBranch]).catch(() => {
+      // Best-effort cleanup; checkout failure here is non-fatal
+    });
     return false;
   }
 
@@ -107,7 +112,9 @@ export async function stepRefresh(ctx: IssueContext): Promise<boolean> {
   await git(["push", "--force-with-lease", "-u", remote, ctx.branch]);
 
   // Return to main branch
-  await git(["checkout", mainBranch]).catch(() => {});
+  await git(["checkout", mainBranch]).catch(() => {
+    // Best-effort return to main; checkout failure here is non-fatal
+  });
 
   return true;
 }

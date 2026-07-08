@@ -9,6 +9,9 @@ export const REPO_ROOT = resolve(__dirname, "../..");
 export const AUTO_PR_DIR = join(REPO_ROOT, ".auto-pr");
 export const TEMPLATES_DIR = join(__dirname, "prompt-templates");
 
+/** Matches the first Markdown H1 heading in a document */
+const TITLE_RE = /^# (.+)$/m;
+
 // ── Config types ──
 
 export interface RepoConfig {
@@ -104,12 +107,12 @@ export async function gh<T = unknown>(args: string[]): Promise<T> {
 }
 
 /** Run gh CLI and return raw stdout (doesn't throw on failure) */
-export async function ghRaw(args: string[]): Promise<string> {
+export function ghRaw(args: string[]): Promise<string> {
   return execSafe("gh", args);
 }
 
 /** Run git and return stdout */
-export async function git(args: string[]): Promise<string> {
+export function git(args: string[]): Promise<string> {
   return exec("git", args);
 }
 
@@ -277,7 +280,7 @@ export interface IssueContext {
 }
 
 export function repoShortName(repo: string): string {
-  return repo.split("/").pop()!;
+  return repo.split("/").at(-1) ?? repo;
 }
 
 export function buildIssueContext(
@@ -345,7 +348,7 @@ export function buildContextFromArtifacts(
   }
 
   const content = readFileSync(ramblingsPath, "utf-8");
-  const titleMatch = content.match(/^# (.+)$/m);
+  const titleMatch = content.match(TITLE_RE);
   const title = titleMatch?.[1] ?? `Issue #${issueNumber}`;
 
   const lines = content.split("\n");

@@ -27,7 +27,11 @@ const makeBot = Effect.gen(function* () {
 
   yield* Effect.acquireRelease(Effect.succeed(bot), () =>
     // bot.stop() throws if the bot was never started; ignore that edge.
-    Effect.promise(() => bot.stop().catch(() => {}))
+    Effect.promise(() =>
+      bot.stop().catch(() => {
+        // Bot was never started; nothing to stop.
+      })
+    )
   );
 
   const send = (

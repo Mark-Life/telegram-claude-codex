@@ -84,6 +84,75 @@ function escapeHtml(text: string) {
     .replace(/>/g, "&gt;");
 }
 
+/** No-op that swallows errors from best-effort Telegram calls (edits/deletes/pins) */
+const swallow = () => {
+  // Best-effort operations: failures here are non-critical and intentionally ignored.
+};
+
+/** Chat id from context; message/callback updates always carry a chat */
+const requireChat = (ctx: Context) => {
+  if (!ctx.chat) {
+    throw new Error("No chat context");
+  }
+  return ctx.chat.id;
+};
+
+/** Human-readable label for the active project (general / basename / none) */
+const describeProject = (activeProject: string, projectsDir: string) => {
+  if (!activeProject) {
+    return "(none)";
+  }
+  return activeProject === projectsDir ? "general" : basename(activeProject);
+};
+
+type ForwardOrigin = NonNullable<
+  NonNullable<Context["message"]>["forward_origin"]
+>;
+
+/** Display name for a forwarded message origin */
+const forwardSenderName = (origin: ForwardOrigin) => {
+  if (origin.type === "user") {
+    return origin.sender_user.first_name;
+  }
+  if (origin.type === "channel") {
+    return origin.chat.title;
+  }
+  if (origin.type === "hidden_user") {
+    return origin.sender_user_name;
+  }
+  return "unknown";
+};
+
+/** Unpin existing pins and pin the given edited-message result (best-effort) */
+const repinMessage = async (
+  ctx: Context,
+  chatId: number,
+  msg: Awaited<ReturnType<Context["editMessageText"]>>
+) => {
+  await ctx.api.unpinAllChatMessages(chatId).catch(swallow);
+  const pinnedId =
+    typeof msg === "object" && "message_id" in msg ? msg.message_id : undefined;
+  if (pinnedId) {
+    await ctx.api
+      .pinChatMessage(chatId, pinnedId, { disable_notification: true })
+      .catch(swallow);
+  }
+};
+
+const PROVIDER_CALLBACK_RE = /^provider:(.+)$/;
+const PROJECTS_PAGE_RE = /^projects:(\d+)$/;
+const PROJECT_CALLBACK_RE = /^project:(.+)$/;
+const COMPOSE_SEND_RE = /^compose_send:(\d+)$/;
+const COMPOSE_CANCEL_RE = /^compose_cancel:(\d+)$/;
+const HISTORY_PAGE_RE = /^history:(\d+)$/;
+const SESSION_CALLBACK_RE = /^session:(.+)$/;
+const FORCE_SEND_RE = /^force_send:(\d+)$/;
+const CLEAR_QUEUE_RE = /^clear_queue:(\d+)$/;
+const PLAN_NEW_RE = /^plan_new:(\d+)$/;
+const PLAN_RESUME_RE = /^plan_resume:(\d+)$/;
+const PLAN_MODIFY_RE = /^plan_modify:(\d+)$/;
+const PLAN_CANCEL_RE = /^plan_cancel:(\d+)$/;
+
 /** Persistent reply keyboard with all commands */
 const mainKeyboard = new Keyboard()
   .text("Projects")
@@ -223,12 +292,12 @@ export function createBot(
     Compose: "/compose",
   };
   bot.use((ctx, next) => {
-    const text = ctx.message?.text;
-    if (text && text in buttonToCommand) {
-      const cmd = buttonToCommand[text];
+    const message = ctx.message;
+    if (message?.text && message.text in buttonToCommand) {
+      const cmd = buttonToCommand[message.text];
       if (cmd) {
-        ctx.message!.text = cmd;
-        ctx.message!.entities = [
+        message.text = cmd;
+        message.entities = [
           { type: "bot_command", offset: 0, length: cmd.length },
         ];
       }
@@ -275,7 +344,7 @@ export function createBot(
     });
   });
 
-  bot.callbackQuery(/^provider:(.+)$/, async (ctx) => {
+  bot.callbackQuery(PROVIDER_CALLBACK_RE, async (ctx) => {
     const chosen = ctx.match?.[1] as ProviderId;
     const provider = listProviders().find((p) => p.id === chosen);
     if (!provider) {
@@ -352,7 +421,7 @@ export function createBot(
     await ctx.reply(result.text, { reply_markup: result.keyboard });
   });
 
-  bot.callbackQuery(/^projects:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(PROJECTS_PAGE_RE, async (ctx) => {
     const page = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const result = buildProjectsMessage(page, projectsDir);
 
@@ -365,7 +434,7 @@ export function createBot(
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery(/^project:(.+)$/, async (ctx) => {
+  bot.callbackQuery(PROJECT_CALLBACK_RE, async (ctx) => {
     const name = ctx.match?.[1] ?? "";
     const isGeneral = name === "__general__";
     const fullPath = isGeneral ? projectsDir : join(projectsDir, name);
@@ -381,7 +450,7 @@ export function createBot(
     }
 
     const state = getState(ctx.from.id);
-    const chatId = ctx.chat!.id;
+    const chatId = requireChat(ctx);
     setActiveProject(state, fullPath);
     state.queue = [];
     state.pendingPlan = undefined;
@@ -400,16 +469,7 @@ export function createBot(
       `Active project: ${projectLabel}${branchSuffix}${providerSuffix}`,
       { parse_mode: "HTML" }
     );
-    await ctx.api.unpinAllChatMessages(chatId).catch(() => {});
-    const pinnedId =
-      typeof msg === "object" && "message_id" in msg
-        ? msg.message_id
-        : undefined;
-    if (pinnedId) {
-      await ctx.api
-        .pinChatMessage(chatId, pinnedId, { disable_notification: true })
-        .catch(() => {});
-    }
+    await repinMessage(ctx, chatId, msg);
   });
 
   bot.command("stop", async (ctx) => {
@@ -430,11 +490,7 @@ export function createBot(
 
   bot.command("status", async (ctx) => {
     const state = getState(getUserId(ctx));
-    const project = state.activeProject
-      ? state.activeProject === projectsDir
-        ? "general"
-        : basename(state.activeProject)
-      : "(none)";
+    const project = describeProject(state.activeProject, projectsDir);
     const running = hasActiveProcess(getUserId(ctx)) ? "Yes" : "No";
     const sessionCount = state.sessions[state.activeProvider].size;
     const branch =
@@ -633,14 +689,14 @@ export function createBot(
     await executeCancel(ctx, state);
   });
 
-  bot.callbackQuery(/^compose_send:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(COMPOSE_SEND_RE, async (ctx) => {
     const userId = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const state = getState(userId);
     await ctx.answerCallbackQuery();
     await executeSend(ctx, state);
   });
 
-  bot.callbackQuery(/^compose_cancel:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(COMPOSE_CANCEL_RE, async (ctx) => {
     const userId = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const state = getState(userId);
     await ctx.answerCallbackQuery();
@@ -710,7 +766,7 @@ export function createBot(
     });
   });
 
-  bot.callbackQuery(/^history:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(HISTORY_PAGE_RE, async (ctx) => {
     const page = Number.parseInt(ctx.match?.[1] ?? "", 10);
     const state = getState(ctx.from.id);
     const result = buildHistoryMessage(page, state.activeProvider);
@@ -727,7 +783,7 @@ export function createBot(
     await ctx.answerCallbackQuery();
   });
 
-  bot.callbackQuery(/^session:(.+)$/, async (ctx) => {
+  bot.callbackQuery(SESSION_CALLBACK_RE, async (ctx) => {
     const sessionId = ctx.match?.[1] ?? "";
     const state = getState(ctx.from.id);
 
@@ -742,26 +798,17 @@ export function createBot(
     }
 
     updateSession(state, state.activeProvider, state.activeProject, sessionId);
-    const chatId = ctx.chat!.id;
+    const chatId = requireChat(ctx);
     const projectName = basename(state.activeProject);
     await ctx.answerCallbackQuery({ text: "Session resumed" });
     const msg = await ctx.editMessageText(
       `Resumed session in <b>${escapeHtml(projectName)}</b>. Next message continues this conversation.`,
       { parse_mode: "HTML" }
     );
-    await ctx.api.unpinAllChatMessages(chatId).catch(() => {});
-    const pinnedId =
-      typeof msg === "object" && "message_id" in msg
-        ? msg.message_id
-        : undefined;
-    if (pinnedId) {
-      await ctx.api
-        .pinChatMessage(chatId, pinnedId, { disable_notification: true })
-        .catch(() => {});
-    }
+    await repinMessage(ctx, chatId, msg);
   });
 
-  bot.callbackQuery(/^force_send:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(FORCE_SEND_RE, async (ctx) => {
     const userId = ctx.from.id;
     const stopped = stopAgent(userId, "new_prompt");
     await ctx.answerCallbackQuery({
@@ -769,7 +816,7 @@ export function createBot(
     });
   });
 
-  bot.callbackQuery(/^clear_queue:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(CLEAR_QUEUE_RE, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
     const count = state.queue.length;
@@ -788,7 +835,13 @@ export function createBot(
     state: UserState,
     result: { planPath?: string; sessionId?: string }
   ) {
-    const planPath = result.planPath!;
+    const planPath = result.planPath;
+    if (!planPath) {
+      await ctx.reply("Could not read plan file.", {
+        reply_markup: mainKeyboard,
+      });
+      return;
+    }
     let planContent: string;
     try {
       planContent = readFileSync(planPath, "utf-8");
@@ -805,9 +858,10 @@ export function createBot(
       projectPath: state.activeProject,
     };
 
+    const chatId = requireChat(ctx);
     const chunks = splitText(planContent);
     for (const chunk of chunks) {
-      await sendRichMarkdown(ctx, ctx.chat!.id, chunk);
+      await sendRichMarkdown(ctx, chatId, chunk);
     }
 
     const keyboard = new InlineKeyboard()
@@ -818,13 +872,13 @@ export function createBot(
       .text("Modify plan", `plan_modify:${userId}`);
 
     await ctx.api.sendMessage(
-      ctx.chat!.id,
+      chatId,
       "Plan ready. How would you like to proceed?",
       { reply_markup: keyboard }
     );
   }
 
-  bot.callbackQuery(/^plan_new:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(PLAN_NEW_RE, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
     const plan = activePendingPlan(state);
@@ -854,7 +908,7 @@ export function createBot(
     );
   });
 
-  bot.callbackQuery(/^plan_resume:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(PLAN_RESUME_RE, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
     const plan = activePendingPlan(state);
@@ -885,7 +939,7 @@ export function createBot(
     );
   });
 
-  bot.callbackQuery(/^plan_modify:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(PLAN_MODIFY_RE, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
     if (!activePendingPlan(state)) {
@@ -903,7 +957,7 @@ export function createBot(
     );
   });
 
-  bot.callbackQuery(/^plan_cancel:(\d+)$/, async (ctx) => {
+  bot.callbackQuery(PLAN_CANCEL_RE, async (ctx) => {
     const userId = ctx.from.id;
     const state = getState(userId);
     if (!activePendingPlan(state)) {
@@ -961,6 +1015,75 @@ export function createBot(
     await runAndDrain(ctx, prompt, state, userId);
   }
 
+  /** Run one prompt to completion; returns true if a plan was presented (halts draining) */
+  async function runSinglePrompt(
+    ctx: Context,
+    prompt: string,
+    state: UserState,
+    userId: number
+  ) {
+    const sessionId = state.sessions[state.activeProvider].get(
+      state.activeProject
+    );
+    const projectName =
+      state.activeProject === projectsDir
+        ? "general"
+        : basename(state.activeProject);
+    const branchName =
+      state.activeProject !== projectsDir
+        ? getCurrentBranch(state.activeProject)
+        : null;
+    try {
+      const events = runAgent(state.activeProvider, {
+        userId,
+        prompt,
+        projectDir: state.activeProject,
+        chatId: requireChat(ctx),
+        sessionId,
+      });
+      const result = await streamToTelegram(
+        ctx,
+        events,
+        projectName,
+        getCapabilities(state.activeProvider),
+        { branchName }
+      );
+      if (result.sessionId) {
+        updateSession(
+          state,
+          state.activeProvider,
+          state.activeProject,
+          result.sessionId
+        );
+      }
+      if (result.planPath && getCapabilities(state.activeProvider).planMode) {
+        stopAgent(userId, "stopped");
+        await presentPlan(ctx, userId, state, result);
+        return true;
+      }
+    } catch (e) {
+      console.error("runAndDrain error:", e);
+    }
+    return false;
+  }
+
+  /** Notify the user that a queued message is now being processed */
+  async function notifyQueuedProcessing(
+    ctx: Context,
+    prompt: string,
+    state: UserState
+  ) {
+    const remaining = state.queue.length;
+    const queueInfo = remaining > 0 ? ` | ${remaining} more in queue` : "";
+    const preview = prompt.length > 200 ? `${prompt.slice(0, 200)}...` : prompt;
+    await ctx
+      .reply(
+        `<b>▶ Processing queued message</b>${queueInfo}\n<pre>${escapeHtml(preview)}</pre>`,
+        { parse_mode: "HTML" }
+      )
+      .catch(swallow);
+  }
+
   /** Run an agent prompt and drain any queued messages afterward */
   async function runAndDrain(
     ctx: Context,
@@ -971,69 +1094,25 @@ export function createBot(
     let currentCtx = ctx;
     let currentPrompt = prompt;
     while (true) {
-      const sessionId = state.sessions[state.activeProvider].get(
-        state.activeProject
+      const presentedPlan = await runSinglePrompt(
+        currentCtx,
+        currentPrompt,
+        state,
+        userId
       );
-      const projectName =
-        state.activeProject === projectsDir
-          ? "general"
-          : basename(state.activeProject);
-      const branchName =
-        state.activeProject !== projectsDir
-          ? getCurrentBranch(state.activeProject)
-          : null;
-      try {
-        const events = runAgent(state.activeProvider, {
-          userId,
-          prompt: currentPrompt,
-          projectDir: state.activeProject,
-          chatId: currentCtx.chat!.id,
-          sessionId,
-        });
-        const result = await streamToTelegram(
-          currentCtx,
-          events,
-          projectName,
-          getCapabilities(state.activeProvider),
-          { branchName }
-        );
-        if (result.sessionId) {
-          updateSession(
-            state,
-            state.activeProvider,
-            state.activeProject,
-            result.sessionId
-          );
-        }
-        if (result.planPath && getCapabilities(state.activeProvider).planMode) {
-          stopAgent(userId, "stopped");
-          await presentPlan(currentCtx, userId, state, result);
-          return;
-        }
-      } catch (e) {
-        console.error("runAndDrain error:", e);
+      if (presentedPlan) {
+        return;
       }
-      if (state.queue.length === 0) {
+      const next = state.queue.shift();
+      if (!next) {
         break;
       }
-      const next = state.queue.shift()!;
       currentPrompt = next.prompt;
       currentCtx = next.ctx;
       if (state.queue.length === 0) {
         await cleanupQueueStatus(state, currentCtx);
       }
-      const remaining = state.queue.length;
-      const queueInfo = remaining > 0 ? ` | ${remaining} more in queue` : "";
-      const preview =
-        currentPrompt.length > 200
-          ? `${currentPrompt.slice(0, 200)}...`
-          : currentPrompt;
-      await currentCtx
-        .reply(
-          `<b>▶ Processing queued message</b>${queueInfo}\n<pre>${escapeHtml(preview)}</pre>`,
-          { parse_mode: "HTML" }
-        )
-        .catch(() => {});
+      await notifyQueuedProcessing(currentCtx, currentPrompt, state);
     }
   }
 
@@ -1046,10 +1125,10 @@ export function createBot(
       .text("Clear Queue", `clear_queue:${ctx.from?.id}`);
     if (state.queueStatusMessageId) {
       await ctx.api
-        .editMessageText(ctx.chat!.id, state.queueStatusMessageId, text, {
+        .editMessageText(requireChat(ctx), state.queueStatusMessageId, text, {
           reply_markup: keyboard,
         })
-        .catch(() => {});
+        .catch(swallow);
     } else {
       const msg = await ctx.reply(text, { reply_markup: keyboard });
       state.queueStatusMessageId = msg.message_id;
@@ -1060,8 +1139,8 @@ export function createBot(
   async function cleanupQueueStatus(state: UserState, ctx: Context) {
     if (state.queueStatusMessageId) {
       await ctx.api
-        .deleteMessage(ctx.chat!.id, state.queueStatusMessageId)
-        .catch(() => {});
+        .deleteMessage(requireChat(ctx), state.queueStatusMessageId)
+        .catch(swallow);
       state.queueStatusMessageId = undefined;
     }
   }
@@ -1075,10 +1154,10 @@ export function createBot(
       .text("Cancel", `compose_cancel:${ctx.from?.id}`);
     if (state.composeStatusMessageId) {
       await ctx.api
-        .editMessageText(ctx.chat!.id, state.composeStatusMessageId, text, {
+        .editMessageText(requireChat(ctx), state.composeStatusMessageId, text, {
           reply_markup: keyboard,
         })
-        .catch(() => {});
+        .catch(swallow);
     } else {
       const msg = await ctx.reply(text, { reply_markup: keyboard });
       state.composeStatusMessageId = msg.message_id;
@@ -1089,15 +1168,89 @@ export function createBot(
   async function cleanupComposeStatus(state: UserState, ctx: Context) {
     if (state.composeStatusMessageId) {
       await ctx.api
-        .deleteMessage(ctx.chat!.id, state.composeStatusMessageId)
-        .catch(() => {});
+        .deleteMessage(requireChat(ctx), state.composeStatusMessageId)
+        .catch(swallow);
       state.composeStatusMessageId = undefined;
     }
   }
 
+  /** Transcribe a voice message and show the transcription as a status reply */
+  async function transcribeVoiceForCompose(ctx: Context, messageId: number) {
+    const file = await ctx.getFile();
+    const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const res = await fetch(url);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const status = await ctx.reply("Transcribing...", {
+      reply_parameters: { message_id: messageId },
+    });
+    const transcription = await transcribeAudio(buffer, "voice.ogg");
+    const maxDisplay = 3800;
+    const displayText =
+      transcription.length > maxDisplay
+        ? `${transcription.slice(0, maxDisplay)}... (truncated)`
+        : transcription;
+    await ctx.api.editMessageText(
+      requireChat(ctx),
+      status.message_id,
+      `<blockquote>${escapeHtml(displayText)}</blockquote>`,
+      { parse_mode: "HTML" }
+    );
+    return transcription;
+  }
+
+  /** Build a ComposeMessage from the incoming message, or undefined if unsupported */
+  async function buildComposeMessage(
+    ctx: Context
+  ): Promise<ComposeMessage | undefined> {
+    const message = ctx.message;
+    if (!message) {
+      return;
+    }
+    if (message.voice) {
+      const content = await transcribeVoiceForCompose(ctx, message.message_id);
+      return { type: "voice", content };
+    }
+    if (message.document) {
+      const filename = message.document.file_name ?? `file_${Date.now()}`;
+      const dest = await saveUploadedFile(ctx, filename);
+      const caption = message.caption ?? "";
+      return {
+        type: "file",
+        content: `[File: ${filename} saved at ${dest}]\n${caption}`.trim(),
+      };
+    }
+    if (message.photo) {
+      const largest = message.photo.at(-1);
+      if (!largest) {
+        return;
+      }
+      const filename = `photo_${Date.now()}.jpg`;
+      const dest = await saveUploadedFile(ctx, filename, largest.file_id);
+      const caption = message.caption ?? "";
+      return {
+        type: "photo",
+        content: `[Photo saved at ${dest}]\n${caption}`.trim(),
+      };
+    }
+    if (message.forward_origin) {
+      const text = message.text ?? message.caption ?? "";
+      return {
+        type: "forwarded",
+        content: `[Forwarded from ${forwardSenderName(message.forward_origin)}]\n${text}`,
+      };
+    }
+    if (message.text) {
+      return { type: "text", content: message.text };
+    }
+    return;
+  }
+
   /** Collect a message into compose queue based on its type */
   async function collectComposeMessage(ctx: Context, state: UserState) {
-    const messages = state.composeMessages!;
+    const messages = state.composeMessages;
+    if (!messages) {
+      return;
+    }
     if (messages.length >= MAX_COMPOSE_MESSAGES) {
       await ctx.reply(
         `Compose limit reached (${MAX_COMPOSE_MESSAGES} messages). Use /send to submit or /stop to clear.`
@@ -1105,67 +1258,13 @@ export function createBot(
       return;
     }
     try {
-      if (ctx.message?.voice) {
-        const file = await ctx.getFile();
-        const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-        const res = await fetch(url);
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const status = await ctx.reply("Transcribing...", {
-          reply_parameters: { message_id: ctx.message.message_id },
-        });
-        const transcription = await transcribeAudio(buffer, "voice.ogg");
-        const maxDisplay = 3800;
-        const displayText =
-          transcription.length > maxDisplay
-            ? `${transcription.slice(0, maxDisplay)}... (truncated)`
-            : transcription;
-        await ctx.api.editMessageText(
-          ctx.chat!.id,
-          status.message_id,
-          `<blockquote>${escapeHtml(displayText)}</blockquote>`,
-          { parse_mode: "HTML" }
-        );
-        messages.push({ type: "voice", content: transcription });
-      } else if (ctx.message?.document) {
-        const doc = ctx.message.document;
-        const filename = doc.file_name ?? `file_${Date.now()}`;
-        const dest = await saveUploadedFile(ctx, filename);
-        const caption = ctx.message.caption ?? "";
-        messages.push({
-          type: "file",
-          content: `[File: ${filename} saved at ${dest}]\n${caption}`.trim(),
-        });
-      } else if (ctx.message?.photo) {
-        const photos = ctx.message.photo;
-        const largest = photos.at(-1)!;
-        const filename = `photo_${Date.now()}.jpg`;
-        const dest = await saveUploadedFile(ctx, filename, largest.file_id);
-        const caption = ctx.message.caption ?? "";
-        messages.push({
-          type: "photo",
-          content: `[Photo saved at ${dest}]\n${caption}`.trim(),
-        });
-      } else if (ctx.message?.forward_origin) {
-        const origin = ctx.message.forward_origin;
-        let senderName = "unknown";
-        if (origin.type === "user") {
-          senderName = origin.sender_user.first_name;
-        } else if (origin.type === "channel") {
-          senderName = origin.chat.title;
-        } else if (origin.type === "hidden_user") {
-          senderName = origin.sender_user_name;
-        }
-        const text = ctx.message.text ?? ctx.message.caption ?? "";
-        messages.push({
-          type: "forwarded",
-          content: `[Forwarded from ${senderName}]\n${text}`,
-        });
-      } else if (ctx.message?.text) {
-        messages.push({ type: "text", content: ctx.message.text });
+      const message = await buildComposeMessage(ctx);
+      if (message) {
+        messages.push(message);
       }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : "unknown error";
-      await ctx.reply(`Error collecting message: ${errMsg}`).catch(() => {});
+      await ctx.reply(`Error collecting message: ${errMsg}`).catch(swallow);
       return;
     }
     await updateComposeStatus(ctx, state);
@@ -1317,8 +1416,10 @@ export function createBot(
   }
 
   bot.on("message:photo", async (ctx) => {
-    const photos = ctx.message.photo;
-    const largest = photos.at(-1)!;
+    const largest = ctx.message.photo.at(-1);
+    if (!largest) {
+      return;
+    }
     const filename = `photo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.jpg`;
     const mediaGroupId = ctx.message.media_group_id;
 
