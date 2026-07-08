@@ -28,6 +28,7 @@ const makeRuntime = (maxConcurrentRuns: number) => {
     splitAt: 4000,
     runTimeoutMs: Option.none(),
     maxConcurrentRuns,
+    eventLogPath: ".data/events.jsonl",
   } satisfies typeof AppConfig.Service;
   const layer = RunRegistry.layer.pipe(
     Layer.provide(Layer.succeed(AppConfig, cfg))

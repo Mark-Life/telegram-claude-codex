@@ -72,6 +72,7 @@ type StreamEvent =
       total_cost_usd: number;
       duration_ms: number;
       num_turns: number;
+      usage?: { total_tokens?: number };
     };
 
 /** Field on a tool's input that holds its short human-readable summary */
@@ -235,6 +236,7 @@ const toResultEvent = (parsed: ResultEvent): AgentEvent => ({
   cost: parsed.total_cost_usd,
   durationMs: parsed.duration_ms,
   turns: parsed.num_turns,
+  totalTokens: parsed.usage?.total_tokens,
 });
 
 /** Route a single parsed stream event to its handler */

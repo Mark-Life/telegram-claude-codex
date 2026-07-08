@@ -9,6 +9,10 @@
     "fix": "bunx --bun ultracite fix",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "logs": "bash scripts/logs.sh runs",
+    "logs:errors": "bash scripts/logs.sh errors",
+    "logs:stats": "bash scripts/logs.sh stats",
+    "logs:follow": "bash scripts/logs.sh follow",
     "prepare": "husky"
   },
   "dependencies": {

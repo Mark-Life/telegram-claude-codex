@@ -38,6 +38,26 @@ export type AgentError =
   | AtCapacity;
 
 /**
+ * Maps a tagged agent error to a wide-event run outcome. Pure over `_tag`;
+ * distinct from `classifyOutcome` (which supplies user-facing copy and collapses
+ * timeout into interrupted).
+ */
+export const runOutcomeOf = (
+  e: AgentError
+): "interrupted" | "timeout" | "errored" | "at_capacity" => {
+  switch (e._tag) {
+    case "AgentInterrupted":
+      return "interrupted";
+    case "AgentTimedOut":
+      return "timeout";
+    case "AtCapacity":
+      return "at_capacity";
+    default:
+      return "errored";
+  }
+};
+
+/**
  * Maps a tagged agent error to a user-facing outcome + copy. Pure over `_tag`;
  * the single source of truth for run-outcome wording.
  */

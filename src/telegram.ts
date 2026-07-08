@@ -1,6 +1,9 @@
+import { Effect } from "effect";
 import type { Context } from "grammy";
+import type { AgentError } from "./agent/errors";
 import { classifyOutcome } from "./agent/errors";
 import type { AgentEvent, ProviderCapabilities } from "./agent/types";
+import { runtime } from "./runtime";
 
 const MAX_MSG_LENGTH = 4000;
 const EDIT_INTERVAL_MS = 1500;
@@ -42,6 +45,29 @@ const ignoreError = () => {
   /* dropped draft/typing updates are harmless */
 };
 
+/**
+ * Wrap a fire-and-forget Telegram send/edit so a rejection is swallowed but
+ * still surfaces at debug level (annotated with the call-site label + error
+ * class). Used only for high-signal sites where a rejection means a real
+ * Telegram outage/rate-limit — not the silent UI cleanups (typing/draft flush).
+ */
+const bestEffort =
+  (label: string) =>
+  <T>(p: Promise<T>): Promise<T | undefined> =>
+    p.catch((e) => {
+      runtime
+        .runPromise(
+          Effect.logDebug(`${label} failed`).pipe(
+            Effect.annotateLogs({
+              errorClass: (e as Error)?.name ?? "unknown",
+              label,
+            })
+          )
+        )
+        .catch(ignoreError);
+      return undefined;
+    });
+
 /** Stream a partial rich message. Swallows transient draft errors (drafts are ephemeral). */
 async function safeSendRichDraft(
   ctx: Context,
@@ -49,11 +75,9 @@ async function safeSendRichDraft(
   draftId: number,
   input: RichInput
 ) {
-  try {
-    await ctx.api.sendRichMessageDraft(chatId, draftId, input);
-  } catch {
-    // dropped draft updates are harmless
-  }
+  await bestEffort("sendRichMessageDraft")(
+    ctx.api.sendRichMessageDraft(chatId, draftId, input)
+  );
 }
 
 /** Persist a rich message. Falls back to plain text on failure. */
@@ -63,13 +87,14 @@ async function safeSendRichMessage(
   input: RichInput,
   plain?: string
 ) {
-  try {
-    return await ctx.api.sendRichMessage(chatId, input);
-  } catch {
-    const fallback =
-      plain ?? ("markdown" in input ? input.markdown : input.html);
-    return await ctx.api.sendMessage(chatId, fallback || "...");
+  const sent = await bestEffort("sendRichMessage")(
+    ctx.api.sendRichMessage(chatId, input)
+  );
+  if (sent) {
+    return sent;
   }
+  const fallback = plain ?? ("markdown" in input ? input.markdown : input.html);
+  return await ctx.api.sendMessage(chatId, fallback || "...");
 }
 
 /** Send raw markdown as a rich message (used for one-shot content like plans). */
@@ -81,12 +106,14 @@ export function sendRichMarkdown(
   return safeSendRichMessage(ctx, chatId, { markdown: markdown || "..." });
 }
 
-interface StreamResult {
+export interface StreamResult {
   cost?: number;
   durationMs?: number;
+  errorClass?: AgentError;
   messageId?: number;
   planPath?: string;
   sessionId?: string;
+  totalTokens?: number;
   turns?: number;
 }
 
@@ -345,6 +372,7 @@ const handleResult = async (s: StreamCtx, event: EventOf<"result">) => {
   s.result.cost = event.cost;
   s.result.durationMs = event.durationMs;
   s.result.turns = event.turns;
+  s.result.totalTokens = event.totalTokens;
   if (!s.accumulated && event.text) {
     if (s.mode !== "text") {
       await switchMode(s, "text");
@@ -357,6 +385,9 @@ const handleResult = async (s: StreamCtx, event: EventOf<"result">) => {
 const handleError = async (s: StreamCtx, event: EventOf<"error">) => {
   if (s.mode !== "text") {
     await switchMode(s, "text");
+  }
+  if (event.class) {
+    s.result.errorClass = event.class;
   }
   const copy = event.class ? classifyOutcome(event.class).copy : event.message;
   s.accumulated += s.accumulated ? `\n\n_${copy}_` : copy;
@@ -484,6 +515,9 @@ export async function streamToTelegram(
       }
     }
   } finally {
+    // Cleared on every exit path: normal end, plan-ready break, a thrown
+    // error, and interrupts — which arrive as an in-stream `error` event
+    // (consumed by handleError, not thrown), so the loop still exits here.
     clearInterval(editTimer);
     clearInterval(typingTimer);
   }

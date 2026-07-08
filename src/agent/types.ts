@@ -27,9 +27,13 @@ export type AgentEvent =
       kind: "result";
       text: string;
       sessionId: string;
-      cost: number;
+      // Optional: only providers that actually report economics populate these.
+      // Providers that never report them (e.g. Codex) leave them undefined so
+      // downstream `?? null` correctly degrades to NULL instead of a fabricated 0.
+      cost?: number;
       durationMs: number;
-      turns: number;
+      turns?: number;
+      totalTokens?: number;
     }
   | { kind: "error"; message: string; class?: AgentError };
 

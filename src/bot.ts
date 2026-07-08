@@ -5,7 +5,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import { basename, join } from "node:path";
+import { Effect } from "effect";
 import { Bot, type Context, InlineKeyboard, Keyboard } from "grammy";
 import {
   clearSessionCache,
@@ -16,6 +18,7 @@ import {
   runAgent,
   stopAgent,
 } from "./agent";
+import { classifyOutcome, runOutcomeOf } from "./agent/errors";
 import { listProviders } from "./agent/registry";
 import type { ProviderId } from "./agent/types";
 import {
@@ -25,13 +28,136 @@ import {
   listOpenPRs,
 } from "./git";
 import {
+  clipError,
+  Observability,
+  RUN_EVENT_MARKER,
+  RunEvent,
+} from "./observability";
+import { runtime } from "./runtime";
+import {
   loadPersistedState,
   setActiveProject,
   setActiveProvider,
   updateSession,
 } from "./state";
-import { sendRichMarkdown, splitText, streamToTelegram } from "./telegram";
+import {
+  type StreamResult,
+  sendRichMarkdown,
+  splitText,
+  streamToTelegram,
+} from "./telegram";
 import { transcribeAudio } from "./transcribe";
+
+/** Read package.json once at load to stamp a version onto every wide event. */
+const readVersion = () => {
+  try {
+    const path = join(import.meta.dir, "..", "package.json");
+    const raw = readFileSync(path, "utf8");
+    return (JSON.parse(raw) as { version?: string }).version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+};
+
+/** App version stamped onto every wide event. */
+const VERSION = readVersion();
+
+/** Mutable outcome/economics accumulator for a single prompt run. */
+interface RunRecord {
+  costUsd: number | null;
+  durationMs: number | null;
+  errorClass?: string;
+  errorMessage?: string;
+  outcome:
+    | "done"
+    | "errored"
+    | "interrupted"
+    | "timeout"
+    | "already_running"
+    | "at_capacity";
+  sessionId: string | null;
+  totalTokens: number | null;
+  turns: number | null;
+}
+
+/** Immutable per-run context captured before streaming starts. */
+interface RunEventMeta {
+  project: string;
+  promptChars: number;
+  provider: string;
+  queueDepth: number;
+  runId: string;
+  userId: number;
+}
+
+/**
+ * Fold a completed stream result into the run record: economics are populated
+ * only when the provider reported them, and an in-stream error (surfaced on the
+ * result rather than thrown) is mapped to its outcome, nulling economics on any
+ * degraded (non-errored) outcome.
+ */
+const applyResultEconomics = (result: StreamResult, rec: RunRecord) => {
+  rec.costUsd = result.cost ?? null;
+  rec.turns = result.turns ?? null;
+  rec.totalTokens = result.totalTokens ?? null;
+  rec.durationMs = result.durationMs ?? null;
+  if (!result.errorClass) {
+    return;
+  }
+  rec.outcome = runOutcomeOf(result.errorClass);
+  if (rec.outcome === "errored") {
+    rec.errorClass = result.errorClass._tag;
+    rec.errorMessage = clipError(classifyOutcome(result.errorClass).copy);
+  } else {
+    rec.costUsd = null;
+    rec.turns = null;
+    rec.totalTokens = null;
+    rec.durationMs = null;
+  }
+};
+
+/**
+ * Emit the single wide event for a run. NULLs economics on any non-terminal
+ * outcome, then bridges into the Effect runtime; a rejected bridge is swallowed
+ * so observability can never break a user's chat.
+ */
+const emitRunEvent = async (rec: RunRecord, meta: RunEventMeta) => {
+  if (rec.outcome !== "done" && rec.outcome !== "errored") {
+    rec.costUsd = null;
+    rec.turns = null;
+    rec.totalTokens = null;
+    rec.durationMs = null;
+  }
+  try {
+    // RunEvent construction validates synchronously and can throw; keep it
+    // inside the guard so the emit is fully best-effort on every path.
+    const evt = new RunEvent({
+      ts: new Date().toISOString(),
+      event: RUN_EVENT_MARKER,
+      runId: meta.runId,
+      userId: meta.userId,
+      provider: meta.provider,
+      project: meta.project,
+      sessionId: rec.sessionId,
+      promptChars: meta.promptChars,
+      outcome: rec.outcome,
+      costUsd: rec.costUsd,
+      turns: rec.turns,
+      totalTokens: rec.totalTokens,
+      durationMs: rec.durationMs,
+      queueDepth: meta.queueDepth,
+      errorClass: rec.errorClass,
+      errorMessage: rec.errorMessage,
+      version: VERSION,
+      host: hostname(),
+    });
+    await runtime.runPromise(
+      Effect.flatMap(Observability, (o) => o.recordRun(evt))
+    );
+  } catch {
+    // swallow: observability is best-effort and must never break a chat
+  }
+};
 
 interface QueuedMessage {
   ctx: Context;
@@ -1033,11 +1159,34 @@ export function createBot(
       state.activeProject !== projectsDir
         ? getCurrentBranch(state.activeProject)
         : null;
+
+    // Wide-event context captured up front so every return path emits once.
+    const provider = state.activeProvider;
+    const project = state.activeProject;
+    const meta: RunEventMeta = {
+      runId: crypto.randomUUID(),
+      userId,
+      provider,
+      project,
+      promptChars: prompt.length,
+      queueDepth: state.queue.length,
+    };
+
+    const rec: RunRecord = {
+      outcome: "done",
+      costUsd: null,
+      turns: null,
+      totalTokens: null,
+      durationMs: null,
+      sessionId: sessionId ?? null,
+    };
+    let presentedPlan = false;
+
     try {
-      const events = runAgent(state.activeProvider, {
+      const events = runAgent(provider, {
         userId,
         prompt,
-        projectDir: state.activeProject,
+        projectDir: project,
         chatId: requireChat(ctx),
         sessionId,
       });
@@ -1045,26 +1194,32 @@ export function createBot(
         ctx,
         events,
         projectName,
-        getCapabilities(state.activeProvider),
+        getCapabilities(provider),
         { branchName }
       );
       if (result.sessionId) {
-        updateSession(
-          state,
-          state.activeProvider,
-          state.activeProject,
-          result.sessionId
-        );
+        rec.sessionId = result.sessionId;
+        updateSession(state, provider, project, result.sessionId);
       }
-      if (result.planPath && getCapabilities(state.activeProvider).planMode) {
+      applyResultEconomics(result, rec);
+
+      if (result.planPath && getCapabilities(provider).planMode) {
         stopAgent(userId, "stopped");
         await presentPlan(ctx, userId, state, result);
-        return true;
+        presentedPlan = true;
       }
     } catch (e) {
+      rec.outcome = "errored";
+      rec.errorClass =
+        (e as { _tag?: string })?._tag ??
+        (e as Error)?.name ??
+        "ProviderCrashed";
+      rec.errorMessage = clipError(String((e as Error)?.message ?? e));
       console.error("runAndDrain error:", e);
+    } finally {
+      await emitRunEvent(rec, meta);
     }
-    return false;
+    return presentedPlan;
   }
 
   /** Notify the user that a queued message is now being processed */

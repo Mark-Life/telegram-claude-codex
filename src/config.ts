@@ -45,6 +45,11 @@ const load = Effect.gen(function* () {
     Config.withDefault(4)
   );
 
+  // Wide-event ledger path (one JSON line per run); overridable via TG_LOG_FILE.
+  const eventLogPath = yield* Config.string("TG_LOG_FILE").pipe(
+    Config.withDefault(".data/events.jsonl")
+  );
+
   return {
     botToken,
     allowedUserId,
@@ -55,6 +60,7 @@ const load = Effect.gen(function* () {
     splitAt,
     runTimeoutMs,
     maxConcurrentRuns,
+    eventLogPath,
   } as const;
 });
 

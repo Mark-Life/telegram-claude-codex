@@ -3,6 +3,7 @@ import { Layer, ManagedRuntime } from "effect";
 import { RunRegistry } from "./agent/run-registry";
 import { AppConfig } from "./config";
 import { loggerLayer } from "./logger";
+import { Observability } from "./observability";
 import { BotService } from "./telegram/bot-service";
 
 /**
@@ -22,9 +23,11 @@ const infraLayer = Layer.mergeAll(
  * self-contained layer suitable for ManagedRuntime.make. Later phases add
  * services here.
  */
-const appLayer = Layer.mergeAll(BotService.layer, RunRegistry.layer).pipe(
-  Layer.provideMerge(infraLayer)
-);
+const appLayer = Layer.mergeAll(
+  BotService.layer,
+  RunRegistry.layer,
+  Observability.layer
+).pipe(Layer.provideMerge(infraLayer));
 
 /**
  * Long-lived runtime owning the appLayer scope. grammy keeps the process loop;

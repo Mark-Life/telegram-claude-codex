@@ -194,13 +194,18 @@ function* handleCodexEvent(
     return;
   }
   if (parsed.type === "turn.completed") {
+    const u = "usage" in parsed ? parsed.usage : undefined;
+    // Codex never reports cost or turns (see capabilities.cost/subagents:false):
+    // leave them undefined rather than fabricating 0, so the wide event degrades
+    // to NULL instead of recording a fake $0.0000 / 0-turn run.
     yield {
       kind: "result",
       text: state.lastAgentMessage,
       sessionId: state.sessionId,
-      cost: 0,
       durationMs: Date.now() - state.start,
-      turns: 0,
+      totalTokens: u
+        ? u.input_tokens + u.output_tokens + u.reasoning_output_tokens
+        : undefined,
     };
     return;
   }
