@@ -51,7 +51,17 @@ import {
   splitText,
   streamToTelegram,
 } from "./telegram";
-import { transcribeAudio } from "./transcribe";
+import { TranscribeService } from "./transcribe";
+
+/**
+ * Promise-facing bridge to the Effect TranscribeService: resolves the spoken
+ * text or rejects (TranscriptionError) so the existing voice handlers keep their
+ * try/catch shape.
+ */
+const transcribeAudio = (buffer: Buffer, filename: string) =>
+  runtime.runPromise(
+    Effect.flatMap(TranscribeService, (t) => t.transcribe(buffer, filename))
+  );
 
 /** Read package.json once at load to stamp a version onto every wide event. */
 const readVersion = () => {

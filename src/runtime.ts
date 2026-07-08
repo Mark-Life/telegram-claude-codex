@@ -7,6 +7,7 @@ import { loggerLayer } from "./logger";
 import { Observability } from "./observability";
 import { BotService } from "./telegram/bot-service";
 import { telemetryLayer } from "./telemetry";
+import { TranscribeService } from "./transcribe";
 
 /**
  * Console logging + the optional OTLP forwarder as ONE composed layer.
@@ -44,7 +45,8 @@ const appLayer = Layer.mergeAll(
   BotService.layer,
   RunRegistry.layer,
   Observability.layer,
-  SessionStore.layer
+  SessionStore.layer,
+  TranscribeService.layer
 ).pipe(Layer.provideMerge(infraLayer));
 
 /**
