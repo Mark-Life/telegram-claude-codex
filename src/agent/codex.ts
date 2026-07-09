@@ -9,11 +9,17 @@ import {
   type ThreadOptions,
   type Usage,
 } from "@openai/codex-sdk";
+import { runtime } from "../runtime";
 import {
   clearSessionCache,
   getSessionProject,
   listAllSessions,
 } from "./codex-history";
+import {
+  type HttpMcpServer,
+  readExecutorMcpServers,
+  toCodexMcpServers,
+} from "./executor-mcp";
 import type { AgentEvent, AgentProvider, RunOptions } from "./types";
 
 const ZSH_WRAPPER = /^\/bin\/\w+ -lc /;
@@ -279,9 +285,12 @@ const threadOptions = (opts: RunOptions): ThreadOptions => ({
  * `CLAUDECODE` (its presence confuses Codex); passing `env` means the SDK does
  * not additionally inherit `process.env`. Codex's default shell-environment
  * policy strips `*TOKEN*` names, which would hide `BOT_TOKEN` from the
- * send-file script, so it is force-set for the shell tool via config.
+ * send-file script, so it is force-set for the shell tool via config. The
+ * Executor MCP server, when configured, rides the same config object.
  */
-const codexOptions = (): CodexOptions => {
+const codexOptions = (
+  mcpServers?: Record<string, HttpMcpServer>
+): CodexOptions => {
   const { CLAUDECODE: _drop, ...rest } = process.env;
   const env = Object.fromEntries(
     Object.entries(rest).filter(
@@ -289,15 +298,19 @@ const codexOptions = (): CodexOptions => {
     )
   );
   const botToken = process.env.BOT_TOKEN;
-  const config = botToken
-    ? {
-        shell_environment_policy: {
-          inherit: "all",
-          set: { BOT_TOKEN: botToken },
-        },
-      }
-    : undefined;
-  return config ? { env, config } : { env };
+  const mcp = toCodexMcpServers(mcpServers);
+  const config: NonNullable<CodexOptions["config"]> = {
+    ...(botToken
+      ? {
+          shell_environment_policy: {
+            inherit: "all",
+            set: { BOT_TOKEN: botToken },
+          },
+        }
+      : {}),
+    ...(mcp ? { mcp_servers: mcp } : {}),
+  };
+  return Object.keys(config).length > 0 ? { env, config } : { env };
 };
 
 /** True when PLAN.md exists and was (re)written during this run. */
@@ -320,7 +333,9 @@ async function* run(
   opts: RunOptions,
   signal: AbortSignal
 ): AsyncGenerator<AgentEvent> {
-  const codex = new Codex(codexOptions());
+  const codex = new Codex(
+    codexOptions(runtime.runSync(readExecutorMcpServers))
+  );
   const thread = opts.sessionId
     ? codex.resumeThread(opts.sessionId, threadOptions(opts))
     : codex.startThread(threadOptions(opts));

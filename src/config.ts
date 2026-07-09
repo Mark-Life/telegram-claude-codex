@@ -36,6 +36,19 @@ const load = Effect.gen(function* () {
     (secret) => Redacted.value(secret).length > 0
   );
 
+  // Cloud Executor (executor.sh): the org-scoped MCP endpoint plus an API key
+  // minted in its dashboard. Both optional — when either is absent, agent runs
+  // get no Executor MCP server wired (see buildExecutorMcpServers). The key is
+  // a secret => redacted. Blank strings are treated as absent.
+  const executorMcpUrl = Option.filter(
+    yield* Config.option(Config.string("EXECUTOR_MCP_URL")),
+    (url) => url.trim().length > 0
+  );
+  const executorApiKey = Option.filter(
+    yield* Config.option(Config.redacted("EXECUTOR_API_KEY")),
+    (secret) => Redacted.value(secret).trim().length > 0
+  );
+
   // Tunables previously hard-coded across the codebase.
   const draftIntervalMs = yield* Config.int("DRAFT_INTERVAL_MS").pipe(
     Config.withDefault(300)
@@ -82,6 +95,8 @@ const load = Effect.gen(function* () {
     groqApiKey,
     projectsDir,
     anthropicApiKey,
+    executorMcpUrl,
+    executorApiKey,
     draftIntervalMs,
     splitAt,
     runTimeoutMs,
