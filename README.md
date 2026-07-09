@@ -76,6 +76,15 @@ All optional, with sensible defaults:
 | `DRAFT_INTERVAL_MS` | `300` | Telegram draft update interval (ms) |
 | `SPLIT_AT` | `4000` | Message split threshold (chars) |
 | `ANTHROPIC_API_KEY` | (unset) | Optional API-key fallback for Docker/CI; unset keeps subscription login |
+| `EXECUTOR_MCP_URL` | (unset) | Cloud Executor's org-scoped MCP endpoint (`https://executor.sh/org_<id>/mcp`) |
+| `EXECUTOR_API_KEY` | (unset) | Executor API key; sent as `Authorization: Bearer <key>` |
+
+**Executor (external integrations over MCP).** Optionally wire [Executor](https://executor.sh) into every agent run as an MCP server, giving the agent a single tool surface for external systems — Notion, GitHub, Vercel, PostHog, and whatever else you connect. Set both env vars (endpoint and key are minted in the Executor dashboard); when either is blank the bot runs without Executor and nothing else changes. Both providers are wired: Claude via the Agent SDK's `mcpServers`, Codex via an `mcp_servers` config override. Executor exposes exactly two meta-tools — `execute` (run code against the configured sources) and `resume` (continue a paused, approval-gated execution) — which surface to the model as `mcp__executor__execute` / `mcp__executor__resume`. Sources are configured in the dashboard, not in `.env`.
+
+```bash
+EXECUTOR_MCP_URL=https://executor.sh/org_xxx/mcp
+EXECUTOR_API_KEY=exec_...
+```
 
 **Claude agent hardening.** Every Claude run is passed a locked-down SDK `Settings` profile by default: plan mode (`Enter`/`ExitPlanMode`) and interactive/harness tools (`AskUserQuestion`, cron, remote/push, notebook, `DesignSync`, …) are denied, bundled skills / remote control / artifacts are disabled, and `effortLevel` is `high`; workflows stay on. Override any subset with `CLAUDE_SETTINGS_JSON` — top-level keys replace wholesale, `permissions` merges one level deep, and malformed JSON fails fast at boot. Examples:
 
@@ -180,6 +189,7 @@ Use `/compose` to batch multiple messages into a single prompt. Useful for forwa
 - Follow-up messages continue the same session for the active provider (Claude via the SDK `resume` option, Codex `exec resume <id>`); sessions are tracked per provider
 - UI features adapt to provider capabilities — Codex omits cost/turns (duration only) and subagent messages; both stream thinking
 - Voice notes are transcribed via Groq Whisper (`whisper-large-v3-turbo`)
+- When `EXECUTOR_MCP_URL` + `EXECUTOR_API_KEY` are set, cloud Executor is attached to both providers as an MCP server, so the agent can reach external integrations over `mcp__executor__execute` / `mcp__executor__resume`
 - One active process per user (across providers); messages sent while busy are queued automatically
 - Plan mode is organic for both providers: Claude writes to `.claude/plans/` and calls `ExitPlanMode`; Codex follows the `.codex/plans/PLAN.md` convention it's taught via an injected prompt prefix. Either triggers the same interception — the bot displays the plan as plain text and offers action buttons: execute in a new session, execute keeping context, or modify with feedback
 - Use `/stop` to cancel the current process and clear the queue

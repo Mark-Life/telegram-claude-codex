@@ -12,6 +12,7 @@ import {
   getSessionProject,
   listAllSessions,
 } from "./claude-history";
+import { readExecutorMcpServers } from "./executor-mcp";
 import type { AgentEvent, AgentProvider, RunOptions } from "./types";
 
 /** The raw Anthropic stream event carried by an SDK partial-assistant message. */
@@ -251,12 +252,14 @@ const buildFileSystemPrompt = (chatId: number) => {
  * the caller's signal so the runner's scope-close tears the SDK subprocess down.
  * No apiKey is set: subscription/local auth stays the default. `settings` is the
  * boot-resolved hardening layer (AppConfig.claudeSettings) and wins over any
- * ambient ~/.claude/settings.json.
+ * ambient ~/.claude/settings.json. `mcpServers` carries the Executor MCP server
+ * when configured (undefined otherwise, so the key is simply omitted).
  */
 const buildQuery = (
   opts: RunOptions,
   signal: AbortSignal,
-  settings: Settings
+  settings: Settings,
+  mcpServers: Options["mcpServers"]
 ) => {
   const abortController = new AbortController();
   signal.addEventListener("abort", () => abortController.abort(), {
@@ -275,14 +278,20 @@ const buildQuery = (
       append: buildFileSystemPrompt(opts.chatId),
     },
   };
+  if (mcpServers) {
+    options.mcpServers = mcpServers;
+  }
   if (opts.sessionId) {
     options.resume = opts.sessionId;
   }
   return { prompt: opts.prompt, options };
 };
 
-/** Boot-resolved Claude settings, read from the runtime's AppConfig. */
-const readClaudeSettings = Effect.map(AppConfig, (c) => c.claudeSettings);
+/** Boot-resolved per-run inputs (hardening settings + Executor MCP wiring). */
+const readRunConfig = Effect.all({
+  settings: Effect.map(AppConfig, (c) => c.claudeSettings),
+  mcpServers: readExecutorMcpServers,
+});
 
 /**
  * Drive the Claude Agent SDK for one run, normalizing its message stream into
@@ -301,8 +310,10 @@ async function* run(
   };
   let sawStreamEvents = false;
 
-  const settings = runtime.runSync(readClaudeSettings);
-  for await (const msg of query(buildQuery(opts, signal, settings))) {
+  const { settings, mcpServers } = runtime.runSync(readRunConfig);
+  for await (const msg of query(
+    buildQuery(opts, signal, settings, mcpServers)
+  )) {
     if (msg.type === "stream_event") {
       sawStreamEvents = true;
       yield* handlePartialEvent(state, msg.event);

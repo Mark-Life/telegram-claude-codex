@@ -24,6 +24,8 @@ const makeRuntime = (maxConcurrentRuns: number) => {
     groqApiKey: Redacted.make("x"),
     projectsDir: "/tmp",
     anthropicApiKey: Option.none(),
+    executorMcpUrl: Option.none(),
+    executorApiKey: Option.none(),
     draftIntervalMs: 300,
     splitAt: 4000,
     runTimeoutMs: Option.none(),
