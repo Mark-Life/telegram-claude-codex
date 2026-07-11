@@ -33,6 +33,16 @@ export type StepName = (typeof STEPS)[number]["name"];
 export const STEP_NAMES = STEPS.map((s) => s.name);
 
 /**
+ * Checkout the main branch as best-effort cleanup so a failed or paused
+ * pipeline never leaves the repo parked on a feature branch. Failures
+ * (dirty tree, missing branch) are intentionally ignored.
+ */
+const returnToMain = () =>
+  git(["checkout", getConfig().mainBranch]).catch(() => {
+    /* best-effort cleanup; ignore if the checkout fails */
+  });
+
+/**
  * Run the pipeline for a single issue, starting from whatever step is needed.
  * If `untilStep` is provided, stop after that step completes.
  */
@@ -45,7 +55,8 @@ export async function runPipeline(
   // Checkout the branch first (if it exists) so we see any previously committed artifacts
   try {
     const branches = await git(["branch", "--list", ctx.branch]);
-    if (branches.includes(ctx.branch.split("/").pop()!)) {
+    const shortName = ctx.branch.split("/").at(-1) ?? ctx.branch;
+    if (branches.includes(shortName)) {
       await git(["checkout", ctx.branch]);
     }
   } catch {
@@ -67,18 +78,18 @@ export async function runPipeline(
     if (!success) {
       log(`Pipeline stopped at "${step.name}" for ${ctx.repo}#${ctx.number}`);
       // Return to main so we don't leave the repo on a feature branch
-      await git(["checkout", getConfig().mainBranch]).catch(() => {});
+      await returnToMain();
       return;
     }
 
     if (untilStep && step.name === untilStep) {
       log(`Pipeline paused after "${step.name}" (--until ${untilStep})`);
-      await git(["checkout", getConfig().mainBranch]).catch(() => {});
+      await returnToMain();
       return;
     }
   }
 
   log(`Pipeline complete for ${ctx.repo}#${ctx.number}`);
   // Return to main
-  await git(["checkout", getConfig().mainBranch]).catch(() => {});
+  await returnToMain();
 }

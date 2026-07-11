@@ -9,6 +9,18 @@
       "!dist/**/*"
     ]
   },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": { "noMagicNumbers": "off" },
+          "complexity": { "noExcessiveCognitiveComplexity": "off" },
+          "suspicious": { "useAwait": "off" }
+        }
+      }
+    }
+  ],
   "javascript": {
     "globals": ["Bun"]
   },
@@ -16,16 +28,16 @@
     "enabled": true,
     "rules": {
       "recommended": true,
-      "suspicious": {
-        "noConsole": "off",
-        "noEmptyBlockStatements": "off",
-        "noExplicitAny": "warn",
-        "useAwait": "warn"
-      },
+      // "suspicious": {
+      //   "noConsole": "off",
+      //   "noEmptyBlockStatements": "off",
+      //   "noExplicitAny": "warn",
+      //   "useAwait": "warn"
+      // },
       "style": {
-        "noMagicNumbers": "off",
-        "noNonNullAssertion": "warn",
-        "noNestedTernary": "warn",
+        // "noMagicNumbers": "off",
+        // "noNonNullAssertion": "warn",
+        // "noNestedTernary": "warn",
         "useConsistentTypeDefinitions": {
           "level": "error",
           "options": {
@@ -46,8 +58,8 @@
       },
       "performance": {
         "noNamespaceImport": "off",
-        "noBarrelFile": "off",
-        "useTopLevelRegex": "warn"
+        "noBarrelFile": "off"
+        // "useTopLevelRegex": "warn"
       }
     }
   }

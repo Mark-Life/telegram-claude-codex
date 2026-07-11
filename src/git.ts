@@ -2,6 +2,9 @@ import { execSync } from "node:child_process";
 
 const MAX_BRANCHES = 50;
 
+const SSH_REMOTE_RE = /^git@([^:]+):(.+?)(?:\.git)?$/;
+const GIT_SUFFIX_RE = /\.git$/;
+
 /** Get GitHub HTTPS URL for a project directory, or null if unavailable */
 export function getGitHubUrl(projectPath: string) {
   try {
@@ -12,14 +15,14 @@ export function getGitHubUrl(projectPath: string) {
       .toString()
       .trim();
     // SSH: git@github.com:user/repo.git -> https://github.com/user/repo
-    const sshMatch = raw.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+    const sshMatch = raw.match(SSH_REMOTE_RE);
     if (sshMatch) {
       return `https://${sshMatch[1]}/${sshMatch[2]}`;
     }
     // HTTPS: strip trailing .git
     try {
       const url = new URL(raw);
-      url.pathname = url.pathname.replace(/\.git$/, "");
+      url.pathname = url.pathname.replace(GIT_SUFFIX_RE, "");
       return url.toString();
     } catch {
       return null;

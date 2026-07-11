@@ -16,21 +16,23 @@ Telegram bot interface for coding agents (Claude Code + OpenAI Codex) on a VPS. 
 - **Voice messages** — voice notes transcribed via Groq Whisper, then sent to the agent as text
 - **Long response splitting** — auto-splits messages exceeding Telegram's 4000 char limit
 - **MarkdownV2 rendering** — formatted output with plain text fallback
-- **Plan mode interception** — works with both providers (Claude's `ExitPlanMode`/`.claude/plans/`, Codex's `.codex/plans/` convention); the plan is presented for approval with options to execute (new/resume session), modify with feedback, or cancel
+- **Plan mode interception** — Codex uses the `.codex/plans/` convention; Claude's `ExitPlanMode`/`.claude/plans/` flow is supported but **off by default** (the hardened Claude settings deny plan mode — re-enable via `CLAUDE_SETTINGS_JSON`). When active, the plan is presented for approval with options to execute (new/resume session), modify with feedback, or cancel
 - **Capability-aware UI** — cost/turns footer, thinking panel, and subagent messages adapt to what the active provider supports (e.g. Codex shows duration only)
+- **Hardened agent defaults** — the Claude Agent SDK runs with a locked-down `Settings` profile (plan mode + interactive/harness tools denied, bundled skills/remote-control/artifacts off, `effortLevel: high`); override any of it via `CLAUDE_SETTINGS_JSON`
+- **Wide-event observability** — one structured JSON line per run appended to `.data/events.jsonl`, queryable with `bun run logs` (no external infra)
 - **Compose mode** — collect multiple messages (text, voice, forwarded, files, photos) into a single prompt with `/compose` and `/send`
 - **Access control** — single authorized user via Telegram user ID
 
 ## Prerequisites
 
 - [Bun](https://bun.sh/) runtime
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated (`claude login`)
+- A Claude subscription login — the [Claude Agent SDK](https://docs.anthropic.com/en/api/agent-sdk/overview) is bundled as a dependency (no separate CLI install needed); it reuses your `~/.claude` login, so authenticate once with `claude login`
 - [Codex](https://developers.openai.com/codex/cli) CLI installed and authenticated (`codex login`) — optional, only if you want the Codex provider
 - [Groq](https://console.groq.com/) API key — for voice message transcription
 
-Agent auth is CLI-managed: log into each CLI once on the host. The bot handles **no** OpenAI/Anthropic API keys — there is no API-key env var for either provider.
+Agent auth is login-managed: authenticate on the host once and the bundled binaries reuse it. No API key is required by default — subscription/CLI login is used (an optional `ANTHROPIC_API_KEY` fallback exists for Docker/CI, see [Optional configuration](#optional-configuration)).
 
-> **Note:** This bot uses `claude -p` (programmatic usage). Starting June 15, 2026, paid Claude plans include a dedicated monthly credit for programmatic usage (`claude -p`, Agent SDK, GitHub Actions). Usage draws from this credit first, then from optional usage credits at API rates. See [Anthropic's announcement](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for details and credit amounts by plan.
+> **Note:** This bot uses the Claude Agent SDK (`query()`). Starting June 15, 2026, paid Claude plans include a dedicated monthly credit for programmatic usage (`claude -p`, Agent SDK, GitHub Actions). Usage draws from this credit first, then from optional usage credits at API rates. See [Anthropic's announcement](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) for details and credit amounts by plan.
 
 ## Setup
 
@@ -57,7 +59,49 @@ PROJECTS_DIR=/home/agent/projects
 GROQ_API_KEY=your_groq_api_key
 ```
 
-No OpenAI or Anthropic API key goes in `.env` — agent auth is handled by the CLIs themselves (see next step).
+No OpenAI or Anthropic API key is required in `.env` — agent auth is handled by the login flow (see next step).
+
+#### Optional configuration
+
+All optional, with sensible defaults:
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `CLAUDE_SETTINGS_JSON` | (hardened defaults) | JSON overlay of Claude Agent SDK `Settings` — override the default lockdown (see below) |
+| `MAX_CONCURRENT_RUNS` | `4` | Global cap on concurrent agent runs |
+| `RUN_TIMEOUT_MS` | (unbounded) | Per-run timeout in ms; unset means `/stop` is the only cancellation |
+| `TG_LOG_FILE` | `.data/events.jsonl` | Wide-event log path |
+| `LOG_FORMAT` | `pretty` on a TTY, else `logfmt` | `pretty` \| `logfmt` \| `json` |
+| `LOG_LEVEL` | `Info` | Minimum log level |
+| `DRAFT_INTERVAL_MS` | `300` | Telegram draft update interval (ms) |
+| `SPLIT_AT` | `4000` | Message split threshold (chars) |
+| `ANTHROPIC_API_KEY` | (unset) | Optional API-key fallback for Docker/CI; unset keeps subscription login |
+| `EXECUTOR_MCP_URL` | (unset) | Cloud Executor's org-scoped MCP endpoint (`https://executor.sh/org_<id>/mcp`) |
+| `EXECUTOR_API_KEY` | (unset) | Executor API key; sent as `Authorization: Bearer <key>` |
+
+**Executor (external integrations over MCP).** Optionally wire [Executor](https://executor.sh) into every agent run as an MCP server, giving the agent a single tool surface for external systems — Notion, Google Workspace, Vercel, Atlassian, and whatever else you connect. Set both env vars (endpoint and key are minted in the Executor dashboard); when either is blank the bot runs without Executor and nothing else changes. Both providers are wired: Claude via the Agent SDK's `mcpServers`, Codex via an `mcp_servers` config override.
+
+Rather than exposing one tool per integration, Executor exposes a small set of meta-tools that surface to the model under the `mcp__executor__*` prefix:
+
+| Tool | Purpose |
+|---|---|
+| `execute` | Run TypeScript in a sandboxed runtime; connected integrations are reachable as `tools.<integration>.*` |
+| `resume` | Continue a paused, approval-gated execution via its `executionId` |
+| `skills` | Fetch long-form how-to guidance (e.g. `skills({name:"execute"})`) kept out of the always-loaded tool descriptions |
+
+Which integrations are available is configured in the Executor dashboard, not in `.env`; the `execute` tool description enumerates them at connect time.
+
+```bash
+EXECUTOR_MCP_URL=https://executor.sh/org_xxx/mcp
+EXECUTOR_API_KEY=exec_...
+```
+
+**Claude agent hardening.** Every Claude run is passed a locked-down SDK `Settings` profile by default: plan mode (`Enter`/`ExitPlanMode`) and interactive/harness tools (`AskUserQuestion`, cron, remote/push, notebook, `DesignSync`, …) are denied, bundled skills / remote control / artifacts are disabled, and `effortLevel` is `high`; workflows stay on. Override any subset with `CLAUDE_SETTINGS_JSON` — top-level keys replace wholesale, `permissions` merges one level deep, and malformed JSON fails fast at boot. Examples:
+
+```bash
+CLAUDE_SETTINGS_JSON='{"permissions":{"deny":[]}}'   # clear all denials (re-enables Claude plan mode)
+CLAUDE_SETTINGS_JSON='{"effortLevel":"medium"}'      # lower effort, keep every other default
+```
 
 ### 4. Authenticate the Agent CLIs
 
@@ -147,21 +191,35 @@ Use `/compose` to batch multiple messages into a single prompt. Useful for forwa
 
 ## How It Works
 
-- Spawns the active provider's CLI in the selected project dir and parses its streaming JSON into a normalized internal event model
-  - Claude Code: `claude -p "<msg>" --output-format stream-json`
-  - Codex: `codex exec --json` (resume via `codex exec resume <id>`)
+- Runs the active provider in the selected project dir and normalizes its streaming output into a provider-agnostic event model
+  - Claude Code: the Agent SDK `query()` runs in-process (no CLI spawn); it bundles its own Claude binary and reuses `~/.claude` login
+  - Codex: spawns `codex exec --json` (resume via `codex exec resume <id>`)
 - Streams response back via `sendMessageDraft` (~300ms interval), falling back to progressive message editing if drafts aren't supported
 - Long responses auto-split into multiple messages (4000 char limit)
-- Follow-up messages continue the same session for the active provider (Claude `-r <id>`, Codex `exec resume <id>`); sessions are tracked per provider
+- Follow-up messages continue the same session for the active provider (Claude via the SDK `resume` option, Codex `exec resume <id>`); sessions are tracked per provider
 - UI features adapt to provider capabilities — Codex omits cost/turns (duration only) and subagent messages; both stream thinking
 - Voice notes are transcribed via Groq Whisper (`whisper-large-v3-turbo`)
+- When `EXECUTOR_MCP_URL` + `EXECUTOR_API_KEY` are set, cloud Executor is attached to both providers as an MCP server, so the agent can reach external integrations through its `mcp__executor__*` meta-tools
 - One active process per user (across providers); messages sent while busy are queued automatically
 - Plan mode is organic for both providers: Claude writes to `.claude/plans/` and calls `ExitPlanMode`; Codex follows the `.codex/plans/PLAN.md` convention it's taught via an injected prompt prefix. Either triggers the same interception — the bot displays the plan as plain text and offers action buttons: execute in a new session, execute keeping context, or modify with feedback
 - Use `/stop` to cancel the current process and clear the queue
 
+## Observability
+
+Each run appends exactly one structured JSON line to `.data/events.jsonl` — outcome, cost, tokens, duration, turns, provider, and project. Economics degrade to `null` (never a fabricated `0`) when a run is interrupted or errors. Query it with no extra infra:
+
+```bash
+bun run logs          # recent runs, aligned table
+bun run logs:errors   # only failed runs (error class + message)
+bun run logs:stats    # counts by outcome + total cost/time
+bun run logs:follow   # live tail
+```
+
+The path is overridable via `TG_LOG_FILE`, and `LOG_FORMAT=json` mirrors the same record to stdout.
+
 ## Stack
 
-TypeScript, Bun, [grammy](https://grammy.dev/), [Groq SDK](https://github.com/groq/groq-typescript)
+TypeScript, Bun, [Effect](https://effect.website/), [grammy](https://grammy.dev/), [Claude Agent SDK](https://docs.anthropic.com/en/api/agent-sdk/overview), [Groq SDK](https://github.com/groq/groq-typescript)
 
 ## Contributing
 

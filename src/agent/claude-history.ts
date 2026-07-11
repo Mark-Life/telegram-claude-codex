@@ -6,6 +6,11 @@ import type { SessionInfo } from "./types";
 const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 const MAX_SESSIONS = 50;
 
+const SLASH_RE = /\//g;
+const LEADING_DASH_RE = /^-/;
+const DASH_RE = /-/g;
+const HTML_TAG_RE = /<[^>]+>/g;
+
 /** Cache of sessionId -> projectPath, populated during listing */
 const sessionProjectCache = new Map<string, string>();
 
@@ -21,21 +26,18 @@ export function clearSessionCache() {
 
 /** Convert a project path to Claude's storage directory name */
 function toStorageDirName(projectPath: string) {
-  return projectPath.replace(/\//g, "-");
+  return projectPath.replace(SLASH_RE, "-");
 }
 
 /** Reverse: storage dir name back to project path */
 function fromStorageDirName(dirName: string) {
   // "-root-projects-foo" → "/root/projects/foo"
-  return dirName.replace(/^-/, "/").replace(/-/g, "/");
+  return dirName.replace(LEADING_DASH_RE, "/").replace(DASH_RE, "/");
 }
 
 /** Strip HTML tags and truncate for display */
 function cleanSummary(raw: string) {
-  return raw
-    .replace(/<[^>]+>/g, "")
-    .trim()
-    .slice(0, 100);
+  return raw.replace(HTML_TAG_RE, "").trim().slice(0, 100);
 }
 
 /** Read first N bytes of a file and extract initial JSONL lines */
@@ -52,55 +54,91 @@ function readHeadLines(filePath: string, maxBytes = 8192): string[] {
   }
 }
 
+/** Accumulating metadata gathered while scanning a session's head lines */
+interface SessionHead {
+  projectPath: string;
+  sessionId: string;
+  startedAt: string;
+  summary: string;
+}
+
+/** Shape of a single parsed JSONL record we care about */
+interface RawRecord {
+  cwd?: string;
+  message?: { content?: unknown };
+  sessionId?: string;
+  timestamp?: string;
+  type?: string;
+}
+
+/** True once every field of interest has been collected */
+const isHeadComplete = (head: SessionHead) =>
+  Boolean(head.sessionId && head.startedAt && head.summary && head.projectPath);
+
+/** Merge one parsed JSONL record into the accumulating head (mutates head) */
+const applyRecord = (head: SessionHead, rec: RawRecord) => {
+  if (!head.sessionId && rec.sessionId) {
+    head.sessionId = rec.sessionId;
+  }
+  if (!head.startedAt && rec.timestamp) {
+    head.startedAt = rec.timestamp;
+  }
+  if (!head.projectPath && rec.cwd) {
+    head.projectPath = rec.cwd;
+  }
+  if (
+    !head.summary &&
+    rec.type === "user" &&
+    typeof rec.message?.content === "string"
+  ) {
+    head.summary = rec.message.content;
+  }
+};
+
+/** Parse head lines into a partial SessionHead, stopping once complete */
+const collectSessionHead = (lines: string[]): SessionHead => {
+  const head: SessionHead = {
+    sessionId: "",
+    summary: "",
+    startedAt: "",
+    projectPath: "",
+  };
+
+  for (const line of lines) {
+    let rec: RawRecord;
+    try {
+      rec = JSON.parse(line) as RawRecord;
+    } catch {
+      // Skip malformed JSONL lines; partial files are expected.
+      continue;
+    }
+    applyRecord(head, rec);
+    if (isHeadComplete(head)) {
+      break;
+    }
+  }
+
+  return head;
+};
+
 /** Extract session metadata from a JSONL file using only the first few lines */
 function parseSessionHead(
   filePath: string,
   mtimeMs: number,
   fallbackProjectPath: string
 ): SessionInfo | null {
-  const lines = readHeadLines(filePath);
+  const head = collectSessionHead(readHeadLines(filePath));
 
-  let sessionId = "";
-  let summary = "";
-  let startedAt = "";
-  let projectPath = "";
-
-  for (const line of lines) {
-    try {
-      const obj = JSON.parse(line);
-      if (!sessionId && obj.sessionId) {
-        sessionId = obj.sessionId;
-      }
-      if (!startedAt && obj.timestamp) {
-        startedAt = obj.timestamp;
-      }
-      if (!projectPath && obj.cwd) {
-        projectPath = obj.cwd;
-      }
-      if (
-        !summary &&
-        obj.type === "user" &&
-        typeof obj.message?.content === "string"
-      ) {
-        summary = obj.message.content;
-      }
-      if (sessionId && startedAt && summary && projectPath) {
-        break;
-      }
-    } catch {}
-  }
-
-  if (!(summary && sessionId)) {
+  if (!(head.summary && head.sessionId)) {
     return null;
   }
-  if (!projectPath) {
-    projectPath = fallbackProjectPath;
-  }
+
+  const projectPath = head.projectPath || fallbackProjectPath;
 
   return {
-    sessionId,
-    summary: cleanSummary(summary),
-    startedAt,
+    sessionId: head.sessionId,
+    summary: cleanSummary(head.summary),
+    startedAt: head.startedAt,
     lastActiveAt: new Date(mtimeMs).toISOString(),
     projectPath,
     projectName: basename(projectPath),

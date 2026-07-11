@@ -1,31 +1,45 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
+import { Effect } from "effect";
+import {
+  importLegacySessions,
+  type LegacySessions,
+} from "./agent/session-store";
 import type { ProviderId } from "./agent/types";
+import { writeJsonAtomic } from "./atomic-write";
+import { runtime } from "./runtime";
+
+const STATE_VERSION = 1 as const;
 
 interface PersistedState {
   activeProject: string;
   activeProvider: ProviderId;
-  sessions: Record<ProviderId, Record<string, string>>;
+  version?: number;
 }
 
 interface BotState {
   activeProject: string;
   activeProvider: ProviderId;
-  sessions: Record<ProviderId, Map<string, string>>;
 }
 
 const DATA_DIR = join(import.meta.dirname, "..", ".data");
 const STATE_FILE = join(DATA_DIR, "state.json");
 const DEFAULT_PROVIDER: ProviderId = "claude";
 
-/** Detect the old flat-session shape (no activeProvider, or a session value is
- * a string instead of a nested object). */
+/**
+ * Best-effort operational event. Bridged through the runtime so it flows to the
+ * phase-1 logger; a logging fault must never abort a state read or write, so the
+ * whole call is guarded.
+ */
+const logEvent = (fields: Record<string, unknown>) => {
+  try {
+    runtime.runFork(Effect.logInfo("state").pipe(Effect.annotateLogs(fields)));
+  } catch {
+    // best-effort: never let observability break persistence
+  }
+};
+
+/** Detect the old flat-session shape (no activeProvider, or a string session value). */
 function isOldShape(parsed: unknown) {
   if (!parsed || typeof parsed !== "object") {
     return false;
@@ -45,91 +59,154 @@ function isOldShape(parsed: unknown) {
   return false;
 }
 
-/** Build empty per-provider session maps. */
-function emptySessions(): Record<ProviderId, Map<string, string>> {
-  return { claude: new Map(), codex: new Map() };
+/** Extract legacy session ids from either the old flat shape or the prior nested shape. */
+function buildLegacySessions(parsed: unknown): LegacySessions {
+  const sessions: LegacySessions = { claude: new Map(), codex: new Map() };
+  if (isOldShape(parsed)) {
+    const oldSessions =
+      (parsed as { sessions?: Record<string, string> }).sessions ?? {};
+    sessions.claude = new Map(Object.entries(oldSessions));
+    return sessions;
+  }
+  const nested = parsed as {
+    sessions?: Partial<Record<ProviderId, Record<string, string>>>;
+  };
+  sessions.claude = new Map(Object.entries(nested.sessions?.claude ?? {}));
+  sessions.codex = new Map(Object.entries(nested.sessions?.codex ?? {}));
+  return sessions;
 }
 
-/** Load persisted state from disk, migrating the old flat-session shape to the
- * provider-namespaced shape. Returns null if the file is missing or corrupt. */
-export function loadPersistedState() {
+/** Parse + normalize the persisted state, throwing only on genuine corruption. */
+function parseState(text: string) {
+  const parsed = JSON.parse(text) as unknown;
+
+  const activeProjectRaw =
+    parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>).activeProject
+      : undefined;
+  const activeProject =
+    typeof activeProjectRaw === "string" && existsSync(activeProjectRaw)
+      ? activeProjectRaw
+      : "";
+
+  const activeProviderRaw =
+    parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>).activeProvider
+      : undefined;
+  const activeProvider: ProviderId =
+    activeProviderRaw === "claude" || activeProviderRaw === "codex"
+      ? activeProviderRaw
+      : DEFAULT_PROVIDER;
+
+  return {
+    activeProvider,
+    activeProject,
+    legacySessions: buildLegacySessions(parsed),
+  };
+}
+
+/** Discriminated result of reading the raw state file (no side effects beyond corrupt-preservation). */
+type StateLoad =
+  | { status: "missing" }
+  | { status: "corrupt"; preservedTo: string; errorClass: string }
+  | ({ status: "ok" } & ReturnType<typeof parseState>);
+
+/**
+ * Read + classify the state file, distinguishing a legitimate first run
+ * (`missing`) from genuine corruption. A parse/shape fault preserves the bad
+ * file as `state.json.corrupt-<ts>` (best-effort — a read-only `.data` must not
+ * block boot) and reports `corrupt` so the caller fails open to defaults —
+ * never a silent total wipe. Pure of runtime logging + legacy import so it is
+ * directly unit-testable against a temp dir. A real IO fault (not ENOENT) is
+ * rethrown rather than masked as empty state.
+ */
+export function readStateFile(stateFile = STATE_FILE): StateLoad {
+  let text: string;
   try {
-    const text = readFileSync(STATE_FILE, "utf-8");
-    const parsed = JSON.parse(text) as unknown;
-
-    const activeProjectRaw =
-      parsed && typeof parsed === "object"
-        ? (parsed as Record<string, unknown>).activeProject
-        : undefined;
-    const activeProject =
-      typeof activeProjectRaw === "string" && existsSync(activeProjectRaw)
-        ? activeProjectRaw
-        : "";
-
-    if (isOldShape(parsed)) {
-      const oldSessions =
-        (parsed as { sessions?: Record<string, string> }).sessions ?? {};
-      const sessions = emptySessions();
-      sessions.claude = new Map(Object.entries(oldSessions));
-      return { activeProvider: DEFAULT_PROVIDER, activeProject, sessions };
+    text = readFileSync(stateFile, "utf-8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      return { status: "missing" };
     }
+    throw e; // real IO fault — surface, don't mask as empty state
+  }
 
-    const persisted = parsed as PersistedState;
-    const activeProvider = persisted.activeProvider ?? DEFAULT_PROVIDER;
-    const sessions = emptySessions();
-    sessions.claude = new Map(Object.entries(persisted.sessions?.claude ?? {}));
-    sessions.codex = new Map(Object.entries(persisted.sessions?.codex ?? {}));
-
-    return { activeProvider, activeProject, sessions };
-  } catch {
-    return null;
+  try {
+    return { status: "ok", ...parseState(text) };
+  } catch (err) {
+    // Only a genuine parse/shape fault is corruption. Preserve the bad file.
+    const preservedTo = `${stateFile}.corrupt-${Date.now()}`;
+    try {
+      renameSync(stateFile, preservedTo);
+    } catch {
+      // keep booting even if preservation fails (read-only / full disk)
+    }
+    return { status: "corrupt", preservedTo, errorClass: (err as Error).name };
   }
 }
 
-/** Persist the provider-namespaced state via an atomic tmp+rename write */
-function saveState(
-  activeProvider: ProviderId,
-  activeProject: string,
-  sessions: Record<ProviderId, Map<string, string>>
-) {
+/**
+ * Load persisted state, distinguishing a legitimate first run from corruption.
+ * A missing/corrupt file returns null so the bot still starts with defaults;
+ * corruption is preserved (see readStateFile). Legacy inline sessions are
+ * imported once into the SessionStore on a successful read.
+ */
+export function loadPersistedState() {
+  const loaded = readStateFile();
+
+  if (loaded.status === "missing") {
+    logEvent({ event: "state.load", result: "missing" });
+    return null;
+  }
+  if (loaded.status === "corrupt") {
+    logEvent({
+      event: "state.load",
+      result: "corrupt",
+      preservedTo: loaded.preservedTo,
+      errorClass: loaded.errorClass,
+    });
+    return null; // fail open: boot with defaults, but the data is preserved
+  }
+
+  // The legacy import writes a SECOND file (sessions.json); a transient write
+  // fault there must never be mistaken for state.json corruption, so it is
+  // best-effort and outside the corruption guard above.
+  try {
+    importLegacySessions(loaded.legacySessions);
+  } catch (err) {
+    logEvent({
+      event: "state.load",
+      result: "legacy-import-failed",
+      errorClass: (err as Error).name,
+    });
+  }
+  logEvent({ event: "state.load", result: "ok" });
+  return {
+    activeProvider: loaded.activeProvider,
+    activeProject: loaded.activeProject,
+  };
+}
+
+/** Persist active project + provider via a versioned, collision-safe atomic write. */
+function saveState(activeProvider: ProviderId, activeProject: string) {
   mkdirSync(DATA_DIR, { recursive: true });
   const data: PersistedState = {
+    version: STATE_VERSION,
     activeProvider,
     activeProject,
-    sessions: {
-      claude: Object.fromEntries(sessions.claude),
-      codex: Object.fromEntries(sessions.codex),
-    },
   };
-  const tmp = `${STATE_FILE}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2));
-  renameSync(tmp, STATE_FILE);
+  const { bytes, durationMs } = writeJsonAtomic(STATE_FILE, data);
+  logEvent({ event: "state.save", bytes, durationMs });
 }
 
 /** Set active project and persist. */
 export function setActiveProject(state: BotState, path: string) {
   state.activeProject = path;
-  saveState(state.activeProvider, state.activeProject, state.sessions);
+  saveState(state.activeProvider, state.activeProject);
 }
 
 /** Set the active provider and persist. */
 export function setActiveProvider(state: BotState, providerId: ProviderId) {
   state.activeProvider = providerId;
-  saveState(state.activeProvider, state.activeProject, state.sessions);
-}
-
-/** Update or delete a session mapping for a provider and persist. */
-export function updateSession(
-  state: BotState,
-  providerId: ProviderId,
-  projectPath: string,
-  sessionId?: string
-) {
-  const providerSessions = state.sessions[providerId];
-  if (sessionId) {
-    providerSessions.set(projectPath, sessionId);
-  } else {
-    providerSessions.delete(projectPath);
-  }
-  saveState(state.activeProvider, state.activeProject, state.sessions);
+  saveState(state.activeProvider, state.activeProject);
 }

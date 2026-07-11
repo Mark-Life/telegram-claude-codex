@@ -28,10 +28,12 @@ Telegram bot that bridges coding-agent CLIs (Claude Code + OpenAI Codex) with Te
 
 - **types.ts** — `AgentEvent` (normalized event model), `ProviderId` (`"claude"|"codex"`), `RunOptions`, `ProviderCapabilities` (`{cost, planMode, subagents, thinking}`), `SessionInfo`, `ProviderSpec`, `AgentProvider`.
 - **runner.ts** — Generic process lifecycle: global one-process-per-user (keyed by userId, across providers), AbortController, 10-min timeout, stdout line-buffering, stderr capture. AsyncGenerator yielding `AgentEvent`.
-- **claude.ts** — Claude `AgentProvider`: builds `claude -p … --output-format stream-json` args/env + stream-json parser + `.claude/plans/`/`ExitPlanMode` plan detection. Caps: all true.
-- **claude-history.ts** — `~/.claude/projects/...` session reader.
+- **claude.ts** — Claude `AgentProvider` (`kind:"sdk"`): drives `query()` from `@anthropic-ai/claude-agent-sdk`, mapping typed SDK messages onto `AgentEvent` (partial `stream_event`→text/thinking, complete assistant blocks→tool_use, `.claude/plans/`/`ExitPlanMode` plan detection). No apiKey (subscription auth). Passes `AppConfig.claudeSettings` via `options.settings`. Caps: all true.
+- **claude-settings.ts** — `DEFAULT_CLAUDE_SETTINGS` (hardened SDK `Settings`: denies interactive/harness tools + plan mode (`Enter/ExitPlanMode`), disables bundled skills/remote-control/artifacts, `effortLevel:"high"`; workflows left ON). Overridable at boot via `CLAUDE_SETTINGS_JSON` (JSON overlay; top-level keys replace, `permissions` merges one level deep).
+- **claude-history.ts** — `~/.claude/projects/...` session reader (the SDK writes the same store; `persistSession` defaults on).
 - **codex.ts** — Codex `AgentProvider`: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check` (resume via `codex exec resume <id> …`; cwd comes from the spawn). JSONL→`AgentEvent` parser, `.codex/plans/`→`plan_ready` detection. File-send + plan-convention instructions injected via first-turn prompt prefix (Codex has no `--append-system-prompt`). Caps: `{planMode:true, thinking:true, cost:false, subagents:false}`.
 - **codex-history.ts** — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` session reader; project filtering via recorded cwd (realpath-normalized).
+- **executor-mcp.ts** — Optional cloud Executor (executor.sh) MCP wiring. `buildExecutorMcpServers({url, token})` → Claude-SDK `mcpServers` shape (`{type:"http", url, headers}`), undefined when `EXECUTOR_MCP_URL`/`EXECUTOR_API_KEY` are absent/blank. `readExecutorMcpServers` reads them off `AppConfig`; claude.ts passes the map straight to `options.mcpServers`, codex.ts feeds it through `toCodexMcpServers` (→ `{url, http_headers, default_tools_approval_mode:"auto"}`) into an `mcp_servers` config override. Tools surface as `mcp__executor__execute` / `mcp__executor__resume`.
 - **registry.ts** — `getProvider(id)`, `listProviders()` (claude + codex registered).
 - **index.ts** — Public surface: `runAgent(providerId, opts)`, `stopAgent`, `hasActiveProcess`, `stopAll`, `listAllSessions(p)`, `getSessionProject(p, id)`, `clearSessionCache(p)`, `getCapabilities(p)`.
 
@@ -48,6 +50,19 @@ User message → bot.ts (access control + routing)
 - **Provider abstraction**: Each provider is an `AgentProvider` (spec + capabilities + history reader) in the registry. The generic `runner.ts` spawns it and emits normalized `AgentEvent`s — the seam that decouples bot.ts/telegram.ts from any specific CLI. UI features are gated on `getCapabilities(activeProvider)` (e.g. Codex shows duration only, no cost/turns; shows thinking; hides subagents).
 - **Session continuity**: Session IDs stored per provider per project in user state. Follow-up messages resume the same conversation for the active provider.
 - **One process per user**: Global, across providers — a new prompt (or a `/provider` switch) aborts any running process for that user.
-- **Plan mode (organic, no `/plan` command)**: Both providers support plan mode via path conventions. Claude uses `.claude/plans/` + `ExitPlanMode`; Codex is taught the `.codex/plans/PLAN.md` convention via its injected prompt prefix. Either emits `plan_ready`, feeding the same downstream review/approve UI.
 - **Streaming**: AsyncGenerator pattern — the runner yields events, telegram.ts consumes and streams via `sendMessageDraft` (with edit-based fallback). Draft support auto-detected on first event.
 - **HTML formatting**: Markdown converted via regex with placeholder system — code blocks extracted first to avoid nested regex conflicts, then reinserted after other transformations.
+
+
+## Local Effect Source
+
+Two Effect checkouts are cloned locally for reference (we're mid-transition, so both matter):
+
+- **v3** (current stable): `~/.local/share/effect-solutions/effect` — `effect@3.21.0`, the main `Effect-TS/effect` repo.
+- **v4** (smol / next): `~/.local/share/effect-solutions/effect-smol` — `effect@4.0.0-beta.x`, the `Effect-TS/effect-smol` repo.
+
+Use these to explore APIs, find usage examples, and understand implementation details when the documentation isn't enough. Check the version that matches the code you're touching; when in doubt, consult both.
+
+## Code Quality:
+
+When writing or reviewing TypeScript/full-stack code, follow the `quality-code` skill (`.agents/skills/quality-code/SKILL.md`). It loads on demand — invoke it for the full standards.

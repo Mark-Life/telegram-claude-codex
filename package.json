@@ -8,9 +8,19 @@
     "lint": "bunx --bun ultracite check",
     "fix": "bunx --bun ultracite fix",
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "logs": "bash scripts/logs.sh runs",
+    "logs:errors": "bash scripts/logs.sh errors",
+    "logs:stats": "bash scripts/logs.sh stats",
+    "logs:follow": "bash scripts/logs.sh follow",
     "prepare": "husky"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.205",
+    "@effect/platform-bun": "4.0.0-beta.78",
+    "@openai/codex-sdk": "0.139.0",
+    "effect": "4.0.0-beta.78",
     "execa": "^9.6.1",
     "grammy": "^1.44.0",
     "groq-sdk": "^0.37.0"

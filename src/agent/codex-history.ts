@@ -100,7 +100,9 @@ const parseRolloutHead = (
       if (sessionId && projectPath && summary) {
         break;
       }
-    } catch {}
+    } catch {
+      // malformed JSONL line; skip and continue scanning
+    }
   }
 
   if (!(sessionId && summary)) {

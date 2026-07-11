@@ -1,6 +1,5 @@
 node_modules/
 .env
-bun.lock
 
 # auto-pr working files
 .auto-pr/

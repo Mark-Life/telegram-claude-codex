@@ -1,3 +1,6 @@
+import type { Cause, Queue } from "effect";
+import type { AgentError } from "./errors";
+
 /** Supported coding-agent provider identifiers */
 export type ProviderId = "claude" | "codex";
 
@@ -24,11 +27,18 @@ export type AgentEvent =
       kind: "result";
       text: string;
       sessionId: string;
-      cost: number;
+      // Optional: only providers that actually report economics populate these.
+      // Providers that never report them (e.g. Codex) leave them undefined so
+      // downstream `?? null` correctly degrades to NULL instead of a fabricated 0.
+      cost?: number;
       durationMs: number;
-      turns: number;
+      turns?: number;
+      totalTokens?: number;
     }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; class?: AgentError };
+
+/** The event queue bridged from an Effect producer fiber to the AsyncGenerator consumer. */
+export type EventQueue = Queue.Queue<AgentEvent, Cause.Done>;
 
 /** Options passed to a provider run, normalized across providers */
 export interface RunOptions {
@@ -57,23 +67,37 @@ export interface SessionInfo {
   summary: string;
 }
 
-/** Minimal contract the generic runner needs to spawn and parse a provider */
-export interface ProviderSpec {
-  buildArgs: (opts: RunOptions) => string[];
-  buildEnv: (
-    opts: RunOptions,
-    base: Record<string, string | undefined>
-  ) => Record<string, string>;
-  command: string;
-  createParser: () => (lines: string[]) => Generator<AgentEvent>;
-  id: ProviderId;
-}
+/**
+ * Minimal contract the generic runner needs to run a provider. A `cli` provider
+ * is spawned as a child process and its stdout parsed line-by-line; an `sdk`
+ * provider owns its own subprocess and yields normalized events directly.
+ */
+export type ProviderSpec =
+  | {
+      id: ProviderId;
+      kind: "cli";
+      command: string;
+      buildArgs: (opts: RunOptions) => string[];
+      buildEnv: (
+        opts: RunOptions,
+        base: Record<string, string | undefined>
+      ) => Record<string, string>;
+      createParser: () => (lines: string[]) => Generator<AgentEvent>;
+    }
+  | {
+      id: ProviderId;
+      kind: "sdk";
+      run: (
+        opts: RunOptions,
+        signal: AbortSignal
+      ) => AsyncGenerator<AgentEvent>;
+    };
 
 /** Full provider definition: spec plus capabilities and session history access */
-export interface AgentProvider extends ProviderSpec {
+export type AgentProvider = ProviderSpec & {
   capabilities: ProviderCapabilities;
   clearSessionCache: () => void;
   displayName: string;
   getSessionProject: (sessionId: string) => string | undefined;
   listAllSessions: () => SessionInfo[];
-}
+};
