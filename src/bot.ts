@@ -851,6 +851,30 @@ export function createBot(
     await executeCancel(ctx, state);
   });
 
+  /** Format an ISO timestamp as a compact relative time (e.g. "5m ago", "Mar 3") */
+  const formatRelativeTime = (isoTimestamp: string) => {
+    const date = new Date(isoTimestamp);
+    const diffMin = Math.floor((Date.now() - date.getTime()) / 60_000);
+    if (diffMin < 1) {
+      return "just now";
+    }
+    if (diffMin < 60) {
+      return `${diffMin}m ago`;
+    }
+    const diffHour = Math.floor(diffMin / 60);
+    if (diffHour < 24) {
+      return `${diffHour}h ago`;
+    }
+    const diffDay = Math.floor(diffHour / 24);
+    if (diffDay < 7) {
+      return `${diffDay}d ago`;
+    }
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  };
+
   /** Build paginated history message with inline keyboard */
   function buildHistoryMessage(page: number, providerId: ProviderId) {
     const sessions = listAllSessions(providerId);
@@ -867,16 +891,15 @@ export function createBot(
     );
 
     const keyboard = new InlineKeyboard();
-    for (const s of pageSlice) {
-      const date = new Date(s.lastActiveAt).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-      const label = `${date} — [${s.projectName}] ${s.summary.slice(0, 30)}`;
-      keyboard.text(label, `session:${s.sessionId}`).row();
-    }
+    const blocks = pageSlice.map((s, i) => {
+      const n = i + 1;
+      keyboard.text(String(n), `session:${s.sessionId}`);
+      const when = escapeHtml(formatRelativeTime(s.lastActiveAt));
+      const project = escapeHtml(s.projectName);
+      const topic = escapeHtml(s.summary.trim() || "(no topic)");
+      return `<b>${n}.</b> ${when} · <i>${project}</i>\n${topic}`;
+    });
+    keyboard.row();
 
     const navRow: { text: string; data: string }[] = [];
     if (safePage > 0) {
@@ -894,7 +917,8 @@ export function createBot(
 
     const pageIndicator =
       totalPages > 1 ? ` (${safePage + 1}/${totalPages})` : "";
-    return { text: `All sessions${pageIndicator}:`, keyboard };
+    const text = `<b>Sessions${pageIndicator}</b>\n\n${blocks.join("\n\n")}`;
+    return { text, keyboard };
   }
 
   bot.command("history", async (ctx) => {
