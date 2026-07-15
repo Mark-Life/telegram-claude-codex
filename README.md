@@ -121,7 +121,7 @@ bun install
 bun run src/index.ts
 ```
 
-For development, you can use `bun run dev` for auto-reload on changes, or run in a tmux session. However, tmux is not suitable for production — it won't auto-restart on crashes or survive reboots. Use a systemd service for persistent deployments.
+This runs the bot in the foreground — fine for a first check, and `bun run dev` auto-reloads on changes during development. For any real deployment, run it as a systemd service (next section): it auto-restarts on crashes and survives reboots.
 
 ### 6. Run as a Service (recommended)
 
@@ -151,6 +151,8 @@ Operations:
 | `bun run service:uninstall` | Disable, stop, and remove the unit (leaves `.env` and linger untouched) |
 
 If `loginctl enable-linger` needs privilege on your host, install prints the exact `sudo loginctl enable-linger $USER` to run and continues. The raw `systemctl --user … telegram-claude` / `journalctl --user -u telegram-claude -f` commands still work for anyone who prefers them.
+
+**Alternative: tmux.** If you'd rather not use systemd, run the bot in a detached tmux session — `tmux new-session -d -s telegram-claude 'bun run src/index.ts'` — and reattach with `tmux attach -t telegram-claude`. It survives SSH disconnects but won't auto-restart on crashes or come back after a reboot, so prefer the service for anything long-lived.
 
 ## Commands
 
