@@ -14,6 +14,14 @@
     "logs:errors": "bash scripts/logs.sh errors",
     "logs:stats": "bash scripts/logs.sh stats",
     "logs:follow": "bash scripts/logs.sh follow",
+    "service": "bun run scripts/service.ts help",
+    "service:install": "bun run scripts/service.ts install",
+    "service:status": "bun run scripts/service.ts status",
+    "service:logs": "bun run scripts/service.ts logs",
+    "service:start": "bun run scripts/service.ts start",
+    "service:stop": "bun run scripts/service.ts stop",
+    "service:restart": "bun run scripts/service.ts restart",
+    "service:uninstall": "bun run scripts/service.ts uninstall",
     "prepare": "husky"
   },
   "dependencies": {

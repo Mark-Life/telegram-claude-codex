@@ -125,42 +125,32 @@ For development, you can use `bun run dev` for auto-reload on changes, or run in
 
 ### 6. Run as a Service (recommended)
 
-To keep the bot running across reboots and auto-restart on crashes, set up a systemd user service.
-
-A template service file is included in the repo. Edit `telegram-claude.service` to set the correct paths for your system:
-
-- `WorkingDirectory` — path to this repo
-- `EnvironmentFile` — path to your `.env` file
-- `ExecStart` — absolute path to `bun`
-- `Environment=PATH=...` — must include directories containing the `bun`, `claude`, and (if used) `codex` binaries
-
-Then symlink and enable it:
+To keep the bot running across reboots and auto-restart on crashes, install it as a systemd **user** service. One command detects your paths and sets everything up:
 
 ```bash
-# edit paths in the service file
-vim telegram-claude.service
-
-# symlink to systemd user directory
-mkdir -p ~/.config/systemd/user
-ln -sf "$(pwd)/telegram-claude.service" ~/.config/systemd/user/telegram-claude.service
-
-# allow service to run without an active login session
-loginctl enable-linger $USER
-
-# enable and start
-systemctl --user daemon-reload
-systemctl --user enable telegram-claude
-systemctl --user start telegram-claude
+bun run service:install
 ```
 
-Useful commands:
+This detects the `bun` binary (`process.execPath`), the repo directory, your `.env`, and the `PATH` dirs holding `bun`/`claude`/`codex`; generates `~/.config/systemd/user/telegram-claude.service`; runs `daemon-reload`; `enable --now`; and enables linger so the bot survives logout and starts at boot. It is idempotent — re-run it any time (e.g. after `bun upgrade` moves the binary) and it reconciles the unit, restarting only if the definition changed.
+
+Preview the generated unit without writing anything:
 
 ```bash
-systemctl --user status telegram-claude    # check status
-journalctl --user -u telegram-claude -f    # follow logs
-systemctl --user restart telegram-claude   # restart
-systemctl --user stop telegram-claude      # stop
+bun run service:install --dry-run
 ```
+
+Operations:
+
+| Command | Description |
+|-----------------------------|-------------------------------------------|
+| `bun run service:status`    | Show active/enabled/linger state (`--json` for a machine-readable blob) |
+| `bun run service:logs`      | Follow the journal (`-n <N>` scrollback, `--no-follow` to tail once) |
+| `bun run service:restart`   | Restart the service |
+| `bun run service:start`     | Start the service |
+| `bun run service:stop`      | Stop the service |
+| `bun run service:uninstall` | Disable, stop, and remove the unit (leaves `.env` and linger untouched) |
+
+If `loginctl enable-linger` needs privilege on your host, install prints the exact `sudo loginctl enable-linger $USER` to run and continues. The raw `systemctl --user … telegram-claude` / `journalctl --user -u telegram-claude -f` commands still work for anyone who prefers them.
 
 ## Commands
 
