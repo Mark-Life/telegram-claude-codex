@@ -70,6 +70,39 @@ describe("readStateFile", () => {
     }
   });
 
+  test("model/effort choices round-trip, ignoring non-string entries", () => {
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        activeProvider: "claude",
+        activeProject: dir,
+        models: { claude: "opus", codex: 42 },
+        efforts: { codex: "high" },
+      })
+    );
+    const loaded = readStateFile(statePath);
+    expect(loaded.status).toBe("ok");
+    if (loaded.status === "ok") {
+      expect(loaded.models.claude).toBe("opus");
+      expect(loaded.models.codex).toBeUndefined(); // non-string dropped
+      expect(loaded.efforts.codex).toBe("high");
+      expect(loaded.efforts.claude).toBeUndefined();
+    }
+  });
+
+  test("a state file without models/efforts loads them as empty maps", () => {
+    writeFileSync(
+      statePath,
+      JSON.stringify({ activeProvider: "claude", activeProject: dir })
+    );
+    const loaded = readStateFile(statePath);
+    expect(loaded.status).toBe("ok");
+    if (loaded.status === "ok") {
+      expect(loaded.models).toEqual({});
+      expect(loaded.efforts).toEqual({});
+    }
+  });
+
   test("a real IO fault (not ENOENT) is rethrown, never masked as empty", () => {
     // Reading a directory as a file surfaces EISDIR — a genuine fault the loader
     // must surface rather than silently treat as missing/corrupt state.

@@ -11,15 +11,22 @@ import { runtime } from "./runtime";
 
 const STATE_VERSION = 1 as const;
 
+/** Per-provider selection map (model id or effort id, keyed by provider). */
+type ProviderChoices = Partial<Record<ProviderId, string>>;
+
 interface PersistedState {
   activeProject: string;
   activeProvider: ProviderId;
+  efforts?: ProviderChoices;
+  models?: ProviderChoices;
   version?: number;
 }
 
 interface BotState {
   activeProject: string;
   activeProvider: ProviderId;
+  efforts: ProviderChoices;
+  models: ProviderChoices;
 }
 
 const DATA_DIR = join(import.meta.dirname, "..", ".data");
@@ -98,11 +105,33 @@ function parseState(text: string) {
       ? activeProviderRaw
       : DEFAULT_PROVIDER;
 
+  const record =
+    parsed && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
+
   return {
     activeProvider,
     activeProject,
+    models: coerceChoices(record.models),
+    efforts: coerceChoices(record.efforts),
     legacySessions: buildLegacySessions(parsed),
   };
+}
+
+/** Keep only string-valued `claude`/`codex` keys from an untrusted choices map. */
+function coerceChoices(raw: unknown): ProviderChoices {
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  const out: ProviderChoices = {};
+  for (const id of ["claude", "codex"] as const) {
+    const value = (raw as Record<string, unknown>)[id];
+    if (typeof value === "string") {
+      out[id] = value;
+    }
+  }
+  return out;
 }
 
 /** Discriminated result of reading the raw state file (no side effects beyond corrupt-preservation). */
@@ -184,16 +213,20 @@ export function loadPersistedState() {
   return {
     activeProvider: loaded.activeProvider,
     activeProject: loaded.activeProject,
+    models: loaded.models,
+    efforts: loaded.efforts,
   };
 }
 
-/** Persist active project + provider via a versioned, collision-safe atomic write. */
-function saveState(activeProvider: ProviderId, activeProject: string) {
+/** Persist active project, provider, and per-provider model/effort choices atomically. */
+function saveState(state: BotState) {
   mkdirSync(DATA_DIR, { recursive: true });
   const data: PersistedState = {
     version: STATE_VERSION,
-    activeProvider,
-    activeProject,
+    activeProvider: state.activeProvider,
+    activeProject: state.activeProject,
+    models: state.models,
+    efforts: state.efforts,
   };
   const { bytes, durationMs } = writeJsonAtomic(STATE_FILE, data);
   logEvent({ event: "state.save", bytes, durationMs });
@@ -202,11 +235,27 @@ function saveState(activeProvider: ProviderId, activeProject: string) {
 /** Set active project and persist. */
 export function setActiveProject(state: BotState, path: string) {
   state.activeProject = path;
-  saveState(state.activeProvider, state.activeProject);
+  saveState(state);
 }
 
 /** Set the active provider and persist. */
 export function setActiveProvider(state: BotState, providerId: ProviderId) {
   state.activeProvider = providerId;
-  saveState(state.activeProvider, state.activeProject);
+  saveState(state);
+}
+
+/** Set the model for a provider and persist. */
+export function setModel(state: BotState, provider: ProviderId, model: string) {
+  state.models[provider] = model;
+  saveState(state);
+}
+
+/** Set the reasoning-effort level for a provider and persist. */
+export function setEffort(
+  state: BotState,
+  provider: ProviderId,
+  effort: string
+) {
+  state.efforts[provider] = effort;
+  saveState(state);
 }

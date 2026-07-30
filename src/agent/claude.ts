@@ -265,19 +265,28 @@ const buildQuery = (
   signal.addEventListener("abort", () => abortController.abort(), {
     once: true,
   });
+  // Effort overrides the boot-resolved settings for this run only; model is a
+  // plain alias/id passed straight through. "default" sentinel = no override.
+  const effort =
+    opts.effort && opts.effort !== "default"
+      ? (opts.effort as Settings["effortLevel"])
+      : undefined;
   const options: Options = {
     cwd: opts.projectDir,
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
     abortController,
     includePartialMessages: true,
-    settings,
+    settings: effort ? { ...settings, effortLevel: effort } : settings,
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
       append: buildFileSystemPrompt(opts.chatId),
     },
   };
+  if (opts.model && opts.model !== "default") {
+    options.model = opts.model;
+  }
   if (mcpServers) {
     options.mcpServers = mcpServers;
   }
@@ -338,6 +347,20 @@ export const claudeProvider: AgentProvider = {
     cost: true,
     subagents: true,
   },
+  models: [
+    { id: "default", label: "Default" },
+    { id: "opus", label: "Opus" },
+    { id: "sonnet", label: "Sonnet" },
+    { id: "haiku", label: "Haiku" },
+    { id: "fable", label: "Fable" },
+  ],
+  effortLevels: [
+    { id: "default", label: "Default" },
+    { id: "low", label: "Low" },
+    { id: "medium", label: "Medium" },
+    { id: "high", label: "High" },
+    { id: "xhigh", label: "Extra high" },
+  ],
   run,
   listAllSessions,
   getSessionProject,

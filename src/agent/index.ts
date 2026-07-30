@@ -72,3 +72,13 @@ export function clearSessionCache(providerId: ProviderId) {
 export function getCapabilities(providerId: ProviderId) {
   return getProvider(providerId).capabilities;
 }
+
+/** Get a provider's selectable models */
+export function getModels(providerId: ProviderId) {
+  return getProvider(providerId).models;
+}
+
+/** Get a provider's selectable reasoning-effort levels */
+export function getEffortLevels(providerId: ProviderId) {
+  return getProvider(providerId).effortLevels;
+}

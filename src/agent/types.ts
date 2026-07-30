@@ -43,10 +43,20 @@ export type EventQueue = Queue.Queue<AgentEvent, Cause.Done>;
 /** Options passed to a provider run, normalized across providers */
 export interface RunOptions {
   chatId: number;
+  /** Reasoning-effort override; `undefined` or `"default"` uses the provider default. */
+  effort?: string;
+  /** Model override; `undefined` or `"default"` uses the provider default. */
+  model?: string;
   projectDir: string;
   prompt: string;
   sessionId?: string;
   userId: number;
+}
+
+/** A selectable option (model or reasoning effort). `id` `"default"` clears any override. */
+export interface Choice {
+  id: string;
+  label: string;
 }
 
 /** Feature flags describing what a provider supports */
@@ -98,6 +108,10 @@ export type AgentProvider = ProviderSpec & {
   capabilities: ProviderCapabilities;
   clearSessionCache: () => void;
   displayName: string;
+  /** Selectable models; first entry is the `"default"` sentinel (no override). */
+  models: Choice[];
+  /** Selectable reasoning-effort levels; first entry is the `"default"` sentinel. */
+  effortLevels: Choice[];
   getSessionProject: (sessionId: string) => string | undefined;
   listAllSessions: () => SessionInfo[];
 };
