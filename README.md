@@ -160,6 +160,8 @@ If `loginctl enable-linger` needs privilege on your host, install prints the exa
 |-----------|--------------------------------------|
 | `/projects` | Select active project directory |
 | `/provider` | Switch coding agent provider (Claude Code / Codex) |
+| `/model` | Switch model within the active provider |
+| `/effort` | Switch reasoning-effort level within the active provider |
 | `/history` | Browse and resume past sessions |
 | `/stop` | Kill running agent process |
 | `/status` | Show active project, provider & process state |

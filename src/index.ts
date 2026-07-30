@@ -76,6 +76,8 @@ bot.start({
     const commands = [
       { command: "projects", description: "Switch active project" },
       { command: "provider", description: "Switch coding agent provider" },
+      { command: "model", description: "Switch model for active provider" },
+      { command: "effort", description: "Switch reasoning effort" },
       { command: "history", description: "Resume a past session" },
       { command: "new", description: "Start fresh conversation" },
       { command: "stop", description: "Kill active process" },

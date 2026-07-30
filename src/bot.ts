@@ -12,6 +12,8 @@ import { Bot, type Context, InlineKeyboard, Keyboard } from "grammy";
 import {
   clearSessionCache,
   getCapabilities,
+  getEffortLevels,
+  getModels,
   getSessionProject,
   hasActiveProcess,
   listAllSessions,
@@ -44,6 +46,8 @@ import {
   loadPersistedState,
   setActiveProject,
   setActiveProvider,
+  setEffort,
+  setModel,
 } from "./state";
 import {
   type StreamResult,
@@ -195,6 +199,8 @@ interface UserState {
   activeProvider: ProviderId;
   composeMessages?: ComposeMessage[];
   composeStatusMessageId?: number;
+  efforts: Partial<Record<ProviderId, string>>;
+  models: Partial<Record<ProviderId, string>>;
   pendingPlan?: PendingPlan;
   queue: QueuedMessage[];
   queueStatusMessageId?: number;
@@ -280,6 +286,8 @@ const repinMessage = async (
 };
 
 const PROVIDER_CALLBACK_RE = /^provider:(.+)$/;
+const MODEL_CALLBACK_RE = /^model:(.+)$/;
+const EFFORT_CALLBACK_RE = /^effort:(.+)$/;
 const PROJECTS_PAGE_RE = /^projects:(\d+)$/;
 const PROJECT_CALLBACK_RE = /^project:(.+)$/;
 const COMPOSE_SEND_RE = /^compose_send:(\d+)$/;
@@ -340,6 +348,8 @@ function getState(id: number): UserState {
     state = {
       activeProvider: persisted?.activeProvider ?? "claude",
       activeProject: persisted?.activeProject ?? "",
+      models: persisted?.models ?? {},
+      efforts: persisted?.efforts ?? {},
       queue: [],
     };
     userStates.set(id, state);
@@ -507,6 +517,69 @@ export function createBot(
     );
   });
 
+  bot.command("model", async (ctx) => {
+    const state = getState(getUserId(ctx));
+    const provider = state.activeProvider;
+    const current = state.models[provider] ?? "default";
+    const keyboard = new InlineKeyboard();
+    for (const choice of getModels(provider)) {
+      const mark = choice.id === current ? "✓ " : "";
+      keyboard.text(`${mark}${choice.label}`, `model:${choice.id}`).row();
+    }
+    await ctx.reply(`Select a model for ${activeProviderName(state)}:`, {
+      reply_markup: keyboard,
+    });
+  });
+
+  bot.callbackQuery(MODEL_CALLBACK_RE, async (ctx) => {
+    const chosen = ctx.match?.[1] as string;
+    const state = getState(ctx.from.id);
+    const provider = state.activeProvider;
+    const choice = getModels(provider).find((m) => m.id === chosen);
+    if (!choice) {
+      await ctx.answerCallbackQuery({ text: "Unknown model" });
+      return;
+    }
+    setModel(state, provider, chosen);
+    await ctx.answerCallbackQuery({ text: `Model: ${choice.label}` });
+    await ctx.editMessageText(
+      `${activeProviderName(state)} model: ${choice.label}. Applies to your next message.`
+    );
+  });
+
+  bot.command("effort", async (ctx) => {
+    const state = getState(getUserId(ctx));
+    const provider = state.activeProvider;
+    const current = state.efforts[provider] ?? "default";
+    const keyboard = new InlineKeyboard();
+    for (const choice of getEffortLevels(provider)) {
+      const mark = choice.id === current ? "✓ " : "";
+      keyboard.text(`${mark}${choice.label}`, `effort:${choice.id}`).row();
+    }
+    await ctx.reply(
+      `Select reasoning effort for ${activeProviderName(state)}:`,
+      {
+        reply_markup: keyboard,
+      }
+    );
+  });
+
+  bot.callbackQuery(EFFORT_CALLBACK_RE, async (ctx) => {
+    const chosen = ctx.match?.[1] as string;
+    const state = getState(ctx.from.id);
+    const provider = state.activeProvider;
+    const choice = getEffortLevels(provider).find((e) => e.id === chosen);
+    if (!choice) {
+      await ctx.answerCallbackQuery({ text: "Unknown effort level" });
+      return;
+    }
+    setEffort(state, provider, chosen);
+    await ctx.answerCallbackQuery({ text: `Effort: ${choice.label}` });
+    await ctx.editMessageText(
+      `${activeProviderName(state)} reasoning effort: ${choice.label}. Applies to your next message.`
+    );
+  });
+
   /** Build paginated project selection message with inline keyboard */
   function buildProjectsMessage(page: number, projectsDir: string) {
     const projects = listProjects(projectsDir);
@@ -644,9 +717,17 @@ export function createBot(
     const composeLine = state.composeMessages
       ? `\nComposing: ${state.composeMessages.length} messages`
       : "";
+    const provider = state.activeProvider;
+    const modelId = state.models[provider] ?? "default";
+    const modelLabel =
+      getModels(provider).find((m) => m.id === modelId)?.label ?? modelId;
+    const effortId = state.efforts[provider] ?? "default";
+    const effortLabel =
+      getEffortLevels(provider).find((e) => e.id === effortId)?.label ??
+      effortId;
 
     await ctx.reply(
-      `Provider: ${activeProviderName(state)}\nProject: ${project}\nRunning: ${running}\nSessions: ${sessionCount}${branchLine}${queueLine}${composeLine}`,
+      `Provider: ${activeProviderName(state)}\nModel: ${modelLabel} · Effort: ${effortLabel}\nProject: ${project}\nRunning: ${running}\nSessions: ${sessionCount}${branchLine}${queueLine}${composeLine}`,
       { reply_markup: mainKeyboard }
     );
   });
@@ -657,6 +738,8 @@ export function createBot(
         "<b>Commands:</b>",
         "/projects — switch active project",
         "/provider — switch coding agent provider",
+        "/model — switch model for the active provider",
+        "/effort — switch reasoning effort for the active provider",
         "/history — resume a past session",
         "/new — start fresh conversation",
         "/stop — kill active process",
@@ -1245,6 +1328,8 @@ export function createBot(
         projectDir: project,
         chatId: requireChat(ctx),
         sessionId,
+        model: state.models[provider],
+        effort: state.efforts[provider],
       });
       const result = await streamToTelegram(
         ctx,
