@@ -110,8 +110,10 @@ export type AgentProvider = ProviderSpec & {
   displayName: string;
   /** Selectable models; first entry is the `"default"` sentinel (no override). */
   models: Choice[];
-  /** Selectable reasoning-effort levels; first entry is the `"default"` sentinel. */
+  /** Selectable reasoning-effort levels (no sentinel; the default is marked via `defaultEffort`). */
   effortLevels: Choice[];
+  /** The effort id used when the user has made no selection. */
+  defaultEffort: string;
   getSessionProject: (sessionId: string) => string | undefined;
   listAllSessions: () => SessionInfo[];
 };

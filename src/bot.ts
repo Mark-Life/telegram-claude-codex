@@ -12,6 +12,7 @@ import { Bot, type Context, InlineKeyboard, Keyboard } from "grammy";
 import {
   clearSessionCache,
   getCapabilities,
+  getDefaultEffort,
   getEffortLevels,
   getModels,
   getSessionProject,
@@ -550,11 +551,14 @@ export function createBot(
   bot.command("effort", async (ctx) => {
     const state = getState(getUserId(ctx));
     const provider = state.activeProvider;
-    const current = state.efforts[provider] ?? "default";
+    const defaultId = getDefaultEffort(provider);
+    const current = state.efforts[provider] ?? defaultId;
     const keyboard = new InlineKeyboard();
     for (const choice of getEffortLevels(provider)) {
       const mark = choice.id === current ? "✓ " : "";
-      keyboard.text(`${mark}${choice.label}`, `effort:${choice.id}`).row();
+      const label =
+        choice.id === defaultId ? `${choice.label} (default)` : choice.label;
+      keyboard.text(`${mark}${label}`, `effort:${choice.id}`).row();
     }
     await ctx.reply(
       `Select reasoning effort for ${activeProviderName(state)}:`,
@@ -721,7 +725,7 @@ export function createBot(
     const modelId = state.models[provider] ?? "default";
     const modelLabel =
       getModels(provider).find((m) => m.id === modelId)?.label ?? modelId;
-    const effortId = state.efforts[provider] ?? "default";
+    const effortId = state.efforts[provider] ?? getDefaultEffort(provider);
     const effortLabel =
       getEffortLevels(provider).find((e) => e.id === effortId)?.label ??
       effortId;

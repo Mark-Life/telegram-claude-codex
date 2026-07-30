@@ -82,3 +82,8 @@ export function getModels(providerId: ProviderId) {
 export function getEffortLevels(providerId: ProviderId) {
   return getProvider(providerId).effortLevels;
 }
+
+/** Get a provider's default reasoning-effort id (used when the user has not chosen) */
+export function getDefaultEffort(providerId: ProviderId) {
+  return getProvider(providerId).defaultEffort;
+}

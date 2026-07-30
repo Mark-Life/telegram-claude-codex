@@ -355,12 +355,12 @@ export const claudeProvider: AgentProvider = {
     { id: "fable", label: "Fable" },
   ],
   effortLevels: [
-    { id: "default", label: "Default" },
     { id: "low", label: "Low" },
     { id: "medium", label: "Medium" },
     { id: "high", label: "High" },
     { id: "xhigh", label: "Extra high" },
   ],
+  defaultEffort: "high",
   run,
   listAllSessions,
   getSessionProject,
