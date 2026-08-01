@@ -4,6 +4,8 @@
 
 Telegram bot interface for coding agents (Claude Code + OpenAI Codex) on a VPS. Message the bot from any device, it runs the active agent in your project directories and streams back results. Switch providers at runtime with `/provider`.
 
+![telegram-claude demo](https://lxbpjvrr41.ufs.sh/f/6KZjuRTQYJxHIndwqxeD4mh8cu39QUEVvM0jCpqogftBHWKs)
+
 ## Features
 
 - **Multi-provider** — switch between Claude Code and OpenAI Codex at runtime via `/provider`; sessions and capabilities are tracked per provider
