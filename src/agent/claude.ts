@@ -18,6 +18,7 @@ import type {
   AgentEvent,
   AgentProvider,
   CompactEvent,
+  RunKey,
   RunOptions,
 } from "./types";
 
@@ -240,12 +241,20 @@ function* handleResultMessage(msg: ResultMessage): Generator<AgentEvent> {
 
 const SCRIPT_DIR = new URL("../../scripts", import.meta.url).pathname;
 
-/** Build the system-prompt snippet telling Claude how to send files to `chatId`. */
-const buildFileSystemPrompt = (chatId: number) => {
+/**
+ * Build the system-prompt snippet telling Claude how to send files back to the
+ * conversation the run came from. In a forum topic the thread id has to ride
+ * along or the document lands in General.
+ */
+const buildFileSystemPrompt = ({ chatId, threadId }: RunKey) => {
   const scriptPath = `${SCRIPT_DIR}/send-file-to-user.ts`;
+  const target =
+    threadId === null
+      ? `--chat ${chatId}`
+      : `--chat ${chatId} --thread ${threadId}`;
   return [
     "You can send files to the user's Telegram chat.",
-    `To send a file, run: bun ${scriptPath} --path <absolute-file-path> --chat ${chatId}`,
+    `To send a file, run: bun ${scriptPath} --path <absolute-file-path> ${target}`,
     "Only use this when the user explicitly asks you to send/share/download a file.",
     "The script blocks .env and other sensitive files automatically.",
   ].join(" ");
@@ -287,7 +296,7 @@ const buildOptions = (
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: buildFileSystemPrompt(opts.chatId),
+      append: buildFileSystemPrompt(opts),
     },
   };
   if (opts.model && opts.model !== "default") {

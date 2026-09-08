@@ -50,9 +50,19 @@ export type CompactEvent = Extract<
 /** The event queue bridged from an Effect producer fiber to the AsyncGenerator consumer. */
 export type EventQueue = Queue.Queue<AgentEvent, Cause.Done>;
 
-/** Options passed to a provider run, normalized across providers */
-export interface RunOptions {
+/**
+ * Identifies the conversation a run belongs to. Forum topics are separate
+ * conversations, so they get separate run slots; `threadId: null` is the chat
+ * outside any topic.
+ */
+export interface RunKey {
   chatId: number;
+  threadId: number | null;
+  userId: number;
+}
+
+/** Options passed to a provider run, normalized across providers */
+export interface RunOptions extends RunKey {
   /** Reasoning-effort override; `undefined` or `"default"` uses the provider default. */
   effort?: string;
   /** Model override; `undefined` or `"default"` uses the provider default. */
@@ -60,7 +70,6 @@ export interface RunOptions {
   projectDir: string;
   prompt: string;
   sessionId?: string;
-  userId: number;
 }
 
 /** A selectable option (model or reasoning effort). `id` `"default"` clears any override. */

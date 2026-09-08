@@ -1,4 +1,4 @@
-import { Exit, Queue } from "effect";
+import { Cause, Exit, Queue } from "effect";
 import { runtime } from "../runtime";
 import { compactSpec, foldCompactEvents } from "./compact";
 import type { InterruptReason } from "./errors";
@@ -10,6 +10,7 @@ import type {
   CompactEvent,
   ProviderId,
   ProviderSpec,
+  RunKey,
   RunOptions,
 } from "./types";
 
@@ -19,18 +20,27 @@ async function* streamRun(
   opts: RunOptions
 ): AsyncGenerator<AgentEvent> {
   const queue = await runtime.runPromise(startRun(spec, opts));
+  // A queue that ended means the producer is already gone; anything else that
+  // leaves the loop (interrupted take, abandoned consumer) still needs the
+  // teardown below.
+  let producerFinished = false;
   try {
     while (true) {
       const exit = await runtime.runPromiseExit(Queue.take(queue));
       if (Exit.isFailure(exit)) {
+        producerFinished = !Cause.hasInterrupts(exit.cause);
         return; // Cause.Done (end) or interrupt of the take => stream over
       }
       yield exit.value;
     }
   } finally {
     // Consumer abandoned early (e.g. telegram broke on plan_ready) => tear the
-    // producer down. No-op if it already ended.
-    runtime.runFork(stopRun(opts.userId, "stopped"));
+    // producer down. Same slot the run was started in, so a sibling topic's run
+    // is never touched. Skipped after a clean end: the slot may already hold
+    // the next run by then, and stopping it would kill that one instead.
+    if (!producerFinished) {
+      runtime.runFork(stopRun(opts, "stopped"));
+    }
   }
 }
 
@@ -42,7 +52,13 @@ export async function* runAgent(
   for await (const event of streamRun(getProvider(providerId), opts)) {
     // Persist the session id as soon as it exists — on session_init AND result,
     // not result-only — so an interrupted run's session is still resumable.
-    if (event.kind === "session_init" || event.kind === "result") {
+    // A topic keeps its own id on its thread row, so it must not write the
+    // project-wide store: two topics on one project would clobber each other
+    // and the chat outside them.
+    if (
+      opts.threadId === null &&
+      (event.kind === "session_init" || event.kind === "result")
+    ) {
       runtime.runFork(
         setSession({
           project: opts.projectDir,
@@ -58,7 +74,7 @@ export async function* runAgent(
 /**
  * Compact `opts.sessionId` in place for a provider, resolving to the run's one
  * terminal event. It goes through the same registry as a prompt — single-flight
- * per user, /stop-able, capacity-bounded — but its stream is folded into an
+ * per conversation, /stop-able, capacity-bounded — but its stream is folded into an
  * outcome instead of streamed to chat. The session store is never touched, so
  * the session id is unchanged whatever the outcome.
  */
@@ -78,15 +94,12 @@ export async function compactAgent(
   );
 }
 
-/** Stop the active run for a user; returns whether one was running. */
-export const stopAgent = (
-  userId: number,
-  reason: InterruptReason = "stopped"
-) => runtime.runSync(stopRun(userId, reason));
+/** Stop the active run of one conversation; returns whether one was running. */
+export const stopAgent = (key: RunKey, reason: InterruptReason = "stopped") =>
+  runtime.runSync(stopRun(key, reason));
 
-/** Whether a user has an active run. */
-export const hasActiveProcess = (userId: number) =>
-  runtime.runSync(hasRun(userId));
+/** Whether a conversation has an active run. */
+export const hasActiveProcess = (key: RunKey) => runtime.runSync(hasRun(key));
 
 /** Interrupt all runs and await settle (shutdown). */
 export const stopAll = () => runtime.runPromise(stopAllRuns);

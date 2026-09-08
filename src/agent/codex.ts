@@ -21,7 +21,7 @@ import {
   readExecutorMcpServers,
   toCodexMcpServers,
 } from "./executor-mcp";
-import type { AgentEvent, AgentProvider, RunOptions } from "./types";
+import type { AgentEvent, AgentProvider, RunKey, RunOptions } from "./types";
 
 const ZSH_WRAPPER = /^\/bin\/\w+ -lc /;
 
@@ -225,16 +225,21 @@ function* mapThreadEvent(
 const SCRIPT_DIR = new URL("../../scripts", import.meta.url).pathname;
 
 /**
- * Build instruction text telling Codex how to send files to the user's chat.
- * Mirrors claude.ts's buildFileSystemPrompt; Codex has no system-prompt hook,
- * so this is prepended to the prompt instead. The chatId rides the `--chat`
- * arg so no `TELEGRAM_CHAT_ID` env injection is needed.
+ * Build instruction text telling Codex how to send files back to the
+ * conversation the run came from. Mirrors claude.ts's buildFileSystemPrompt;
+ * Codex has no system-prompt hook, so this is prepended to the prompt instead.
+ * The chat and topic ride the `--chat`/`--thread` args so no
+ * `TELEGRAM_CHAT_ID` env injection is needed.
  */
-const buildFileSystemPrompt = (chatId: number) => {
+const buildFileSystemPrompt = ({ chatId, threadId }: RunKey) => {
   const scriptPath = `${SCRIPT_DIR}/send-file-to-user.ts`;
+  const target =
+    threadId === null
+      ? `--chat ${chatId}`
+      : `--chat ${chatId} --thread ${threadId}`;
   return [
     "You can send files to the user's Telegram chat.",
-    `To send a file, run: bun ${scriptPath} --path <absolute-file-path> --chat ${chatId}`,
+    `To send a file, run: bun ${scriptPath} --path <absolute-file-path> ${target}`,
     "Only use this when the user explicitly asks you to send/share/download a file.",
     "The script blocks .env and other sensitive files automatically.",
   ].join(" ");
@@ -265,7 +270,7 @@ const buildCodexPrompt = (opts: RunOptions) => {
   if (opts.sessionId) {
     return opts.prompt;
   }
-  const prefix = `${buildFileSystemPrompt(opts.chatId)}\n\n${buildPlanModePrompt()}`;
+  const prefix = `${buildFileSystemPrompt(opts)}\n\n${buildPlanModePrompt()}`;
   return `${prefix}\n\n${opts.prompt}`;
 };
 

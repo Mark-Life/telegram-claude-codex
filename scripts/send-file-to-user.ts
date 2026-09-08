@@ -22,7 +22,7 @@ const positional = process.argv[2]?.startsWith("--")
 const filePath = readFlag("--path") ?? positional;
 if (!filePath) {
   console.error(
-    "Usage: send-file-to-user.ts --path <filepath> --chat <chatId>"
+    "Usage: send-file-to-user.ts --path <filepath> --chat <chatId> [--thread <topicId>]"
   );
   process.exit(1);
 }
@@ -36,13 +36,21 @@ if (!(botToken && chatId)) {
 }
 
 // Reject a redirected chat id (prompt-injection defense): the requested chat
-// must match the allowed one. ALLOWED_USER_ID is the source of truth; fall back
-// to TELEGRAM_CHAT_ID for older single-user setups.
-const allowedChat = process.env.ALLOWED_USER_ID ?? process.env.TELEGRAM_CHAT_ID;
-if (allowedChat && chatId !== allowedChat) {
+// must match one of the allowed ones. The private chat is ALLOWED_USER_ID; the
+// forum supergroup is ALLOWED_CHAT_ID, and a run started there asks for that id
+// rather than the user's. TELEGRAM_CHAT_ID stays a fallback for older setups.
+const allowedChats = [
+  process.env.ALLOWED_USER_ID,
+  process.env.ALLOWED_CHAT_ID,
+  process.env.TELEGRAM_CHAT_ID,
+].filter((id) => id !== undefined && id !== "");
+if (allowedChats.length > 0 && !allowedChats.includes(chatId)) {
   console.error(`Blocked: chat ${chatId} is not the allowed recipient`);
   process.exit(1);
 }
+
+// A forum topic needs the thread id or the document lands in General.
+const threadId = readFlag("--thread");
 
 const file = Bun.file(filePath);
 if (!(await file.exists())) {
@@ -59,6 +67,9 @@ if (blocked) {
 
 const form = new FormData();
 form.append("chat_id", chatId);
+if (threadId) {
+  form.append("message_thread_id", threadId);
+}
 form.append("document", file, basename);
 
 const res = await fetch(

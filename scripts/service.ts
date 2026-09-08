@@ -8,7 +8,16 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
-import { detectPaths, renderUnit, UNIT } from "./service-unit";
+import {
+  BACKUP_TIMER,
+  BACKUP_UNIT,
+  detectPaths,
+  renderBackupTimer,
+  renderBackupUnit,
+  renderUnit,
+  type ServicePaths,
+  UNIT,
+} from "./service-unit";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -57,10 +66,52 @@ const isLingerOn = (user: string) =>
   );
 
 /**
+ * Write a rendered unit to `path`, but only when its content changed (or a
+ * prior symlink install is found). Returns whether the file was rewritten.
+ */
+const writeUnit = async (path: string, content: string) => {
+  let existing: string | undefined;
+  let wasSymlink = false;
+  try {
+    wasSymlink = (await lstat(path)).isSymbolicLink();
+    existing = await readFile(path, "utf8");
+  } catch {
+    // no existing unit — first install
+  }
+  if (!(existing !== content || wasSymlink || hasFlag("--force"))) {
+    console.log(`Unit already up to date: ${path}`);
+    return false;
+  }
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, content, "utf8");
+  // rename replaces a pre-existing regular file OR symlink atomically,
+  // converging old symlink-based installs to a plain generated file.
+  await rename(tmp, path);
+  console.log(existing ? `Updated ${path}` : `Wrote ${path}`);
+  return true;
+};
+
+/** Install the daily snapshot unit + timer and enable the timer. */
+const installBackup = async (p: ServicePaths) => {
+  await writeUnit(p.backupUnitPath, renderBackupUnit(p));
+  await writeUnit(p.backupTimerPath, renderBackupTimer());
+  systemctl("daemon-reload");
+  const en = systemctl("enable", "--now", BACKUP_TIMER);
+  if (en.code === 0) {
+    console.log(`Enabled ${BACKUP_TIMER} (daily, catches up after downtime)`);
+    return 0;
+  }
+  console.error(en.stderr || en.stdout);
+  return 1;
+};
+
+/**
  * Idempotent install: detect paths, render the unit, write it only when the
  * content changed (or a prior symlink install is found), daemon-reload,
  * `enable --now`, restart when a running unit's definition changed, and enable
- * linger. Safe to re-run; converges to the same state.
+ * linger. `--with-backup` adds the daily database snapshot timer. Safe to
+ * re-run; converges to the same state.
  */
 const install = async () => {
   const p = detectPaths();
@@ -68,31 +119,15 @@ const install = async () => {
 
   if (hasFlag("--dry-run")) {
     console.log(unit);
+    if (hasFlag("--with-backup")) {
+      console.log(renderBackupUnit(p));
+      console.log(renderBackupTimer());
+    }
     return 0;
   }
 
-  let existing: string | undefined;
-  let wasSymlink = false;
-  try {
-    wasSymlink = (await lstat(p.unitPath)).isSymbolicLink();
-    existing = await readFile(p.unitPath, "utf8");
-  } catch {
-    // no existing unit — first install
-  }
-  const changed = existing !== unit || wasSymlink || hasFlag("--force");
   const wasActive = systemctl("is-active", UNIT).stdout === "active";
-
-  await mkdir(dirname(p.unitPath), { recursive: true });
-  if (changed) {
-    const tmp = `${p.unitPath}.tmp`;
-    await writeFile(tmp, unit, "utf8");
-    // rename replaces a pre-existing regular file OR symlink atomically,
-    // converging old symlink-based installs to a plain generated file.
-    await rename(tmp, p.unitPath);
-    console.log(existing ? `Updated ${p.unitPath}` : `Wrote ${p.unitPath}`);
-  } else {
-    console.log(`Unit already up to date: ${p.unitPath}`);
-  }
+  const changed = await writeUnit(p.unitPath, unit);
 
   systemctl("daemon-reload");
   const en = systemctl("enable", "--now", UNIT);
@@ -103,6 +138,10 @@ const install = async () => {
   if (changed && wasActive) {
     systemctl("restart", UNIT);
     console.log("Restarted service (unit changed)");
+  }
+
+  if (hasFlag("--with-backup") && (await installBackup(p)) !== 0) {
+    return 1;
   }
 
   if (!(hasFlag("--no-linger") || isLingerOn(p.user))) {
@@ -126,6 +165,7 @@ const status = () => {
   const active = systemctl("is-active", UNIT).stdout;
   const enabled = systemctl("is-enabled", UNIT).stdout;
   const linger = isLingerOn(p.user);
+  const backupTimer = systemctl("is-enabled", BACKUP_TIMER).stdout;
 
   if (hasFlag("--json")) {
     const mainPid =
@@ -135,6 +175,7 @@ const status = () => {
       JSON.stringify(
         {
           active,
+          backupTimer,
           enabled,
           linger,
           mainPid,
@@ -150,7 +191,7 @@ const status = () => {
   }
 
   console.log(
-    `active: ${active}   enabled: ${enabled}   linger: ${linger ? "yes" : "no"}`
+    `active: ${active}   enabled: ${enabled}   linger: ${linger ? "yes" : "no"}   backup timer: ${backupTimer}`
   );
   return scInherit([
     "systemctl",
@@ -184,15 +225,45 @@ const simple = (verb: string) => {
   return r.code;
 };
 
-/** Stop, disable, remove the generated unit; leaves linger and `.env` alone. */
+/**
+ * Run one snapshot through the installed unit, then show what it logged. Uses
+ * systemd rather than the script directly, so it exercises the real unit.
+ */
+const backupNow = () => {
+  const r = systemctl("start", BACKUP_UNIT);
+  if (r.code !== 0) {
+    console.error(r.stderr || r.stdout);
+    console.error(
+      "Backup units not installed. Run: bun run service:install --with-backup (or `bun run backup` for a direct snapshot)."
+    );
+    return 1;
+  }
+  return scInherit([
+    "journalctl",
+    "--user",
+    "-u",
+    BACKUP_UNIT,
+    "-n",
+    "20",
+    "--no-pager",
+  ]);
+};
+
+/**
+ * Stop, disable, remove the generated units (bot plus backup timer); leaves
+ * linger, `.env` and existing snapshots alone.
+ */
 const uninstall = async () => {
   const p = detectPaths();
   systemctl("disable", "--now", UNIT);
-  try {
-    await rm(p.unitPath);
-    console.log(`Removed ${p.unitPath}`);
-  } catch {
-    // already gone
+  systemctl("disable", "--now", BACKUP_TIMER);
+  for (const path of [p.unitPath, p.backupUnitPath, p.backupTimerPath]) {
+    try {
+      await rm(path);
+      console.log(`Removed ${path}`);
+    } catch {
+      // already gone
+    }
   }
   systemctl("daemon-reload");
   console.log("Uninstalled. Linger and .env left untouched.");
@@ -200,9 +271,10 @@ const uninstall = async () => {
 };
 
 const usage = `Usage: bun run service:<command>
-  install [--force] [--dry-run] [--no-linger]
+  install [--force] [--dry-run] [--no-linger] [--with-backup]
   status  [--json]
   logs    [-n <N>] [--no-follow]
+  backup
   start | stop | restart
   uninstall`;
 
@@ -225,6 +297,9 @@ switch (command) {
     break;
   case "logs":
     code = logs();
+    break;
+  case "backup":
+    code = backupNow();
     break;
   case "start":
     code = simple("start");

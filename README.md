@@ -2,22 +2,26 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Telegram bot interface for coding agents (Claude Code + OpenAI Codex) on a VPS. Message the bot from any device, it runs the active agent in your project directories and streams back results. Switch providers at runtime with `/provider`.
+Telegram bot interface for coding agents (Claude Code + OpenAI Codex) on a VPS. Message the bot from any device, it runs the active agent in your project directories and answers in the chat. Every forum topic is a separate conversation, so several can run at once. Switch providers at runtime with `/provider`.
 
 ![telegram-claude demo](https://lxbpjvrr41.ufs.sh/f/6KZjuRTQYJxHIndwqxeD4mh8cu39QUEVvM0jCpqogftBHWKs)
 
 ## Features
 
+- **Forum topics** — every topic is its own conversation with its own session, project, queue and compose draft; topics run in parallel, up to `MAX_CONCURRENT_RUNS`
+- **Auto-named topics** — a topic Telegram named for you is renamed from its first message, using the active provider's cheapest model
+- **Quiet by default** — a run shows a typing indicator and then one message with the answer; `/verbose` brings tool calls, thinking and the footer back
+- **SQLite state** — topics, sessions, compose drafts and settings live in `.data/bot.db`, with an optional nightly backup timer
 - **Multi-provider** — switch between Claude Code and OpenAI Codex at runtime via `/provider`; sessions and capabilities are tracked per provider
 - **Project switching** — select any project directory via inline keyboard, auto-unpins old messages
-- **Streaming responses** — real-time draft messages with edit-based fallback
-- **Session continuity** — follow-up messages continue the same conversation (per provider)
-- **Message queuing** — messages sent while the agent is busy are queued and processed in order
-- **Thinking stream** — the agent's thinking/reasoning content streamed in a separate message
+- **Streaming responses** — real-time draft messages with edit-based fallback (verbose mode)
+- **Session continuity** — follow-up messages continue the same conversation, per provider and per topic
+- **Message queuing** — messages sent while that conversation is busy are queued and processed in order
+- **Thinking stream** — the agent's thinking/reasoning content streamed in a separate message (verbose mode)
 - **Branch awareness** — current git branch and open PRs shown in `/status` and response footers
 - **Voice messages** — voice notes transcribed via Groq Whisper, then sent to the agent as text
 - **Long response splitting** — auto-splits messages exceeding Telegram's 4000 char limit
-- **MarkdownV2 rendering** — formatted output with plain text fallback
+- **Rich message rendering** — model output sent as markdown, bot chrome as HTML, plain text as fallback
 - **Plan mode interception** — Codex uses the `.codex/plans/` convention; Claude's `ExitPlanMode`/`.claude/plans/` flow is supported but **off by default** (the hardened Claude settings deny plan mode — re-enable via `CLAUDE_SETTINGS_JSON`). When active, the plan is presented for approval with options to execute (new/resume session), modify with feedback, or cancel
 - **Capability-aware UI** — cost/turns footer, thinking panel, and subagent messages adapt to what the active provider supports (e.g. Codex shows duration only)
 - **Hardened agent defaults** — the Claude Agent SDK runs with a locked-down `Settings` profile (plan mode + interactive/harness tools denied, bundled skills/remote-control/artifacts off, `effortLevel: high`); override any of it via `CLAUDE_SETTINGS_JSON`
@@ -31,6 +35,7 @@ Telegram bot interface for coding agents (Claude Code + OpenAI Codex) on a VPS. 
 - A Claude subscription login — the [Claude Agent SDK](https://docs.anthropic.com/en/api/agent-sdk/overview) is bundled as a dependency (no separate CLI install needed); it reuses your `~/.claude` login, so authenticate once with `claude login`
 - [Codex](https://developers.openai.com/codex/cli) CLI installed and authenticated (`codex login`) — optional, only if you want the Codex provider
 - [Groq](https://console.groq.com/) API key — for voice message transcription
+- `sqlite3` on `PATH` — only for the nightly database backup, which uses `sqlite3 .backup` because a plain file copy of a WAL database can miss committed writes (`sudo apt-get install -y sqlite3`)
 
 Agent auth is login-managed: authenticate on the host once and the bundled binaries reuse it. No API key is required by default — subscription/CLI login is used (an optional `ANTHROPIC_API_KEY` fallback exists for Docker/CI, see [Optional configuration](#optional-configuration)).
 
@@ -69,6 +74,7 @@ All optional, with sensible defaults:
 
 | Env var | Default | Purpose |
 |---|---|---|
+| `ALLOWED_CHAT_ID` | (unset) | Forum supergroup id. Only the file-send script reads it: a run started in a topic sends files back to the group, and without this the send is refused |
 | `CLAUDE_SETTINGS_JSON` | (hardened defaults) | JSON overlay of Claude Agent SDK `Settings` — override the default lockdown (see below) |
 | `MAX_CONCURRENT_RUNS` | `4` | Global cap on concurrent agent runs |
 | `RUN_TIMEOUT_MS` | (unbounded) | Per-run timeout in ms; unset means `/stop` is the only cancellation |
@@ -141,20 +147,55 @@ Preview the generated unit without writing anything:
 bun run service:install --dry-run
 ```
 
+Add `--with-backup` to also install the nightly database snapshot timer (see [State and backups](#state-and-backups)):
+
+```bash
+bun run service:install --with-backup
+```
+
 Operations:
 
 | Command | Description |
 |-----------------------------|-------------------------------------------|
-| `bun run service:status`    | Show active/enabled/linger state (`--json` for a machine-readable blob) |
+| `bun run service:status`    | Show active/enabled/linger and backup-timer state (`--json` for a machine-readable blob) |
 | `bun run service:logs`      | Follow the journal (`-n <N>` scrollback, `--no-follow` to tail once) |
+| `bun run service:backup`    | Take one database snapshot through the systemd unit, then show its journal |
 | `bun run service:restart`   | Restart the service |
 | `bun run service:start`     | Start the service |
 | `bun run service:stop`      | Stop the service |
-| `bun run service:uninstall` | Disable, stop, and remove the unit (leaves `.env` and linger untouched) |
+| `bun run service:uninstall` | Disable, stop, and remove the units (leaves `.env`, linger and existing snapshots untouched) |
 
 If `loginctl enable-linger` needs privilege on your host, install prints the exact `sudo loginctl enable-linger $USER` to run and continues. The raw `systemctl --user … telegram-claude` / `journalctl --user -u telegram-claude -f` commands still work for anyone who prefers them.
 
 **Alternative: tmux.** If you'd rather not use systemd, run the bot in a detached tmux session — `tmux new-session -d -s telegram-claude 'bun run src/index.ts'` — and reattach with `tmux attach -t telegram-claude`. It survives SSH disconnects but won't auto-restart on crashes or come back after a reboot, so prefer the service for anything long-lived.
+
+### 7. Upgrading an existing install
+
+```bash
+git pull
+bun install
+bun run service:restart
+```
+
+The first boot after the upgrade creates `.data/bot.db` and imports the old JSON stores into it — active project, provider, per-provider model and effort choices, and every session id in `state.json` and `sessions.json`. The import is guarded by a flag inside the database, so it runs once; the JSON files are left on disk untouched and are never read again. Topics need nothing: each one pins itself the first time you write in it.
+
+Re-run `bun run service:install --with-backup` if you want the nightly snapshot timer. Install is idempotent, so re-running it is safe.
+
+## Topics
+
+Each forum topic is a separate conversation. It pins its own project and provider, keeps its own session id, its own message queue and its own compose draft, and its run has its own slot — so topics work in parallel, bounded only by `MAX_CONCURRENT_RUNS`. A chat without topics, a plain group and the forum's General topic each stay one conversation, exactly as before.
+
+**In your private chat with the bot.** Turn topic mode on for the bot in [@BotFather](https://t.me/BotFather) (`/mybots` → pick the bot → bot settings → topics). Your chat with it then opens as a list of topics rather than one thread. To confirm it took, `getMe` reports the flag:
+
+```bash
+curl -s "https://api.telegram.org/bot$BOT_TOKEN/getMe"   # "has_topics_enabled": true
+```
+
+**In a forum supergroup.** Create a supergroup, turn **Topics** on in its settings, then add the bot as an **administrator** with permission to manage topics. Behaviour is identical to private-chat topics. Two BotFather switches matter here and no API can change them: privacy mode must be **disabled** (`/setprivacy`) or the bot never sees plain messages in a topic, and group membership must be **enabled** (`/setjoingroups`). The bot logs a warning at startup for either.
+
+**Naming.** A topic you name yourself is left alone. When Telegram names it for you, the bot renames it from the first text or voice message you send, using the active provider's cheapest model — one turn, no tools, no session file, and silently dropped if it fails. Renaming the topic yourself before that first message also wins.
+
+**Commands inside a topic.** `/stop` and `/new` affect that topic alone. `/projects` re-pins the topic to the chosen project — starting a fresh session there — and also becomes the default for new conversations; `/provider` behaves the same way. Other topics keep the project and provider they are pinned to. `/verbose` is the one global switch: it applies to every conversation at once.
 
 ## Commands
 
@@ -169,6 +210,7 @@ If `loginctl enable-linger` needs privilege on your host, install prints the exa
 | `/status` | Show active project, provider & process state |
 | `/new` | Clear session, start fresh conversation |
 | `/compact` | Summarize the active session in place, keeping it (Claude Code only) |
+| `/verbose` | Toggle tool calls, thinking and the metadata footer on or off |
 | `/compose` | Start collecting messages into a batch |
 | `/send` | Send all composed messages as one prompt |
 | `/cancel` | Cancel compose mode, discard messages |
@@ -177,6 +219,10 @@ If `loginctl enable-linger` needs privilege on your host, install prints the exa
 | `/help` | Show available commands |
 
 Text messages are forwarded to the active coding agent as prompts. Voice messages are transcribed and forwarded the same way.
+
+### Quiet Output
+
+Output is quiet by default: a run shows a typing indicator and then one message with the answer. Tool calls, thinking, sub-agent messages and the metadata footer (project, cost, time, turns) never reach the chat, and no draft previews are streamed — a long answer is still split across messages, and an error always shows. `/verbose` toggles the full dev view back on and reports which mode you landed in. The choice is stored in `.data/bot.db` and applies to every conversation.
 
 ### Switching Providers
 
@@ -197,15 +243,57 @@ Use `/compose` to batch multiple messages into a single prompt. Useful for forwa
 - Runs the active provider in the selected project dir and normalizes its streaming output into a provider-agnostic event model
   - Claude Code: the Agent SDK `query()` runs in-process (no CLI spawn); it bundles its own Claude binary and reuses `~/.claude` login
   - Codex: spawns `codex exec --json` (resume via `codex exec resume <id>`)
-- Streams response back via `sendMessageDraft` (~300ms interval), falling back to progressive message editing if drafts aren't supported
+- Quiet by default: a typing indicator while the run works, then the answer. In verbose mode the response is also streamed back as drafts (~300ms interval), falling back to progressive message editing if drafts aren't supported
 - Long responses auto-split into multiple messages (4000 char limit)
-- Follow-up messages continue the same session for the active provider (Claude via the SDK `resume` option, Codex `exec resume <id>`); sessions are tracked per provider
+- Follow-up messages continue the same session for the active provider (Claude via the SDK `resume` option, Codex `exec resume <id>`); a forum topic keeps its session id on its own row, everything outside a topic keeps one session per project per provider
 - UI features adapt to provider capabilities — Codex omits cost/turns (duration only) and subagent messages; both stream thinking
 - Voice notes are transcribed via Groq Whisper (`whisper-large-v3-turbo`)
 - When `EXECUTOR_MCP_URL` + `EXECUTOR_API_KEY` are set, cloud Executor is attached to both providers as an MCP server, so the agent can reach external integrations through its `mcp__executor__*` meta-tools
-- One active process per user (across providers); messages sent while busy are queued automatically
+- One run at a time per conversation (across providers); a message sent while that conversation is busy is queued, while other topics keep running in parallel up to `MAX_CONCURRENT_RUNS`
 - Plan mode is organic for both providers: Claude writes to `.claude/plans/` and calls `ExitPlanMode`; Codex follows the `.codex/plans/PLAN.md` convention it's taught via an injected prompt prefix. Either triggers the same interception — the bot displays the plan as plain text and offers action buttons: execute in a new session, execute keeping context, or modify with feedback
 - Use `/stop` to cancel the current process and clear the queue
+
+## State and backups
+
+Everything the bot remembers lives in `.data/`, next to the code. It is git-ignored and the only thing worth backing up.
+
+| File | Holds |
+|---|---|
+| `.data/bot.db` | SQLite: forum topics (project pin, provider, session id), per-project sessions, compose drafts, and settings — active project and provider, model and effort per provider, verbosity |
+| `.data/events.jsonl` | one JSON line per run (see [Observability](#observability)) |
+| `.data/backups/` | nightly `bot.db` snapshots, once you install the timer |
+| `.data/state.json`, `.data/sessions.json` | legacy JSON stores. Imported into `bot.db` once on first boot, then left in place and never read again |
+
+The database runs in WAL mode, so `bot.db-wal` and `bot.db-shm` sit beside it.
+
+### Nightly backup
+
+Two more systemd user units: `telegram-claude-backup.service` takes one snapshot, `telegram-claude-backup.timer` fires it daily with `Persistent=true`, so a run missed while the machine was down is caught up. Install and check them:
+
+```bash
+bun run service:install --with-backup
+systemctl --user list-timers telegram-claude-backup
+```
+
+Each run writes `.data/backups/bot-YYYYMMDD.db.gz` and deletes snapshots older than 14 days; set `BACKUP_KEEP_DAYS` in `.env` to change the window. The snapshot is taken with `sqlite3 .backup`, so `sqlite3` must be on `PATH`. Take one by hand:
+
+```bash
+bun run service:backup   # through the installed unit, then prints its journal
+bun run backup           # the script directly, no systemd
+```
+
+`bun run service:status` shows the timer's state next to the bot's.
+
+### Restore
+
+```bash
+bun run service:stop
+gunzip -c .data/backups/bot-20260901.db.gz > .data/bot.db
+rm -f .data/bot.db-wal .data/bot.db-shm
+bun run service:start
+```
+
+Deleting the stale `-wal` and `-shm` files matters: they belong to the database you just replaced. `events.jsonl` and the legacy JSON files are not in the snapshot.
 
 ## Observability
 
