@@ -234,6 +234,47 @@ describe("streamToTelegram", () => {
     expect(actions.length).toBeGreaterThan(0);
   });
 
+  test("a turn that speaks, works, then speaks again sends two messages", async () => {
+    const { rich, drafts } = await run(
+      [
+        { kind: "text_delta", text: "I'll find the connector." },
+        { kind: "text_end" },
+        { kind: "tool_use", name: "Bash", input: "ls" },
+        { kind: "text_delta", text: "Ticket created." },
+        { kind: "text_end" },
+        {
+          kind: "result",
+          text: "Ticket created.",
+          sessionId: "s-3",
+          durationMs: 900,
+        },
+      ],
+      { policy: QUIET_POLICY }
+    );
+    expect(rich.map((s) => s.body)).toEqual([
+      "I'll find the connector.",
+      "Ticket created.",
+    ]);
+    expect(drafts).toHaveLength(0);
+  });
+
+  test("a trailing text_end leaves the last message to the footer", async () => {
+    const { rich } = await run([
+      { kind: "text_delta", text: "Only answer." },
+      { kind: "text_end" },
+      {
+        kind: "result",
+        text: "Only answer.",
+        sessionId: "s-4",
+        cost: 0.01,
+        durationMs: 900,
+      },
+    ]);
+    expect(rich).toHaveLength(1);
+    expect(rich[0]?.body).toContain("Only answer.");
+    expect(rich[0]?.body).toContain("proj");
+  });
+
   test("the quiet policy still reports errors", async () => {
     const { rich } = await run(
       [

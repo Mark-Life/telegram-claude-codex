@@ -174,18 +174,24 @@ function* handleToolUseBlock(
 /**
  * Map a complete assistant message's content blocks. tool_use (and plan_ready)
  * always emit here; text/thinking are only emitted as a fallback when no partial
- * stream was seen, since the streamed deltas already carried them.
+ * stream was seen, since the streamed deltas already carried them. A message
+ * that spoke closes with `text_end`: this message is where one assistant reply
+ * ends, so the chat keeps the next one separate.
  */
 function* handleAssistantBlocks(
   state: ParserState,
   content: AssistantBlock[],
   sawStreamEvents: boolean
 ): Generator<AgentEvent> {
+  let spoke = false;
   for (const block of content) {
     if (block.type === "tool_use") {
       yield* handleToolUseBlock(state, block);
-    } else if (!sawStreamEvents && block.type === "text" && block.text) {
-      yield { kind: "text_delta", text: block.text };
+    } else if (block.type === "text" && block.text) {
+      spoke = true;
+      if (!sawStreamEvents) {
+        yield { kind: "text_delta", text: block.text };
+      }
     } else if (!sawStreamEvents && block.type === "thinking") {
       yield { kind: "thinking_start" };
       if (block.thinking) {
@@ -193,6 +199,9 @@ function* handleAssistantBlocks(
       }
       yield { kind: "thinking_done", durationMs: 0 };
     }
+  }
+  if (spoke) {
+    yield { kind: "text_end" };
   }
 }
 

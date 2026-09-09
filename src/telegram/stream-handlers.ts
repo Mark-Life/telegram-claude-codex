@@ -13,14 +13,29 @@ import {
   switchMode,
 } from "./stream-state";
 
-/** Append a model text delta, switching into text mode when needed */
+/**
+ * Append a model text delta. Opens a fresh chat message when text mode is not
+ * active, or when the previous assistant message already ended — the delta then
+ * belongs to a new reply, and `switchMode` persists the old one first.
+ */
 const handleTextDelta = async (s: StreamCtx, event: EventOf<"text_delta">) => {
-  if (s.mode !== "text") {
+  if (s.mode !== "text" || s.pendingBreak) {
     await switchMode(s, "text");
     startDraft(s);
   }
   s.accumulated += event.text;
   await flushText(s).catch(ignoreError);
+};
+
+/**
+ * Close the current assistant message. The text stays in `accumulated` so a run
+ * that ends here still carries the footer; only a following delta turns the
+ * boundary into a separate chat message.
+ */
+const handleTextEnd = (s: StreamCtx) => {
+  if (s.mode === "text") {
+    s.pendingBreak = true;
+  }
 };
 
 /** Append a tool-use line, switching into tools mode when needed */
@@ -150,6 +165,9 @@ export const dispatchEvent = async (s: StreamCtx, event: AgentEvent) => {
   switch (event.kind) {
     case "text_delta":
       await handleTextDelta(s, event);
+      break;
+    case "text_end":
+      handleTextEnd(s);
       break;
     case "tool_use":
       await handleToolUse(s, event);

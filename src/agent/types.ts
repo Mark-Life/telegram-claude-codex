@@ -8,6 +8,12 @@ export type ProviderId = "claude" | "codex";
 export type AgentEvent =
   | { kind: "session_init"; sessionId: string }
   | { kind: "text_delta"; text: string }
+  /**
+   * The assistant message the preceding deltas belong to is complete. Any
+   * further text starts a new chat message, so a turn that speaks, works, then
+   * speaks again does not collapse into one wall of text.
+   */
+  | { kind: "text_end" }
   | { kind: "tool_use"; name: string; input: string }
   | { kind: "thinking_start" }
   | { kind: "thinking_delta"; text: string }

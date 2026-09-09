@@ -27,6 +27,11 @@ export interface StreamCtx {
   lastEditTime: number;
   lastTextMessageId: number;
   mode: MessageMode;
+  /**
+   * The last assistant message ended; the next text delta opens a new chat
+   * message instead of extending the current one.
+   */
+  pendingBreak: boolean;
   pendingEdit: boolean;
   /** How much of the run reaches the chat. */
   policy: RenderPolicy;
@@ -55,6 +60,7 @@ export const makeStreamCtx = ({
   lastEditTime: 0,
   lastTextMessageId: 0,
   mode: "none",
+  pendingBreak: false,
   pendingEdit: false,
   policy,
   result: {},
@@ -187,6 +193,7 @@ export const switchMode = async (s: StreamCtx, newMode: MessageMode) => {
     });
   }
   s.mode = newMode;
+  s.pendingBreak = false;
   s.accumulated = "";
   s.toolLines = [];
   s.thinkingText = "";

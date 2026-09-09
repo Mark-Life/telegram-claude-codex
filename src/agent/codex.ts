@@ -149,7 +149,9 @@ function* handleItem(
   switch (item.type) {
     case "agent_message":
       state.lastAgentMessage = item.text;
+      // Codex reports a whole reply at once, so the boundary is right here.
       yield { kind: "text_delta", text: item.text };
+      yield { kind: "text_end" };
       return;
     case "command_execution":
       yield {
