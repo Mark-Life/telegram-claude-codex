@@ -5,7 +5,16 @@ import { dirname, resolve } from "node:path";
 /** systemd --user unit file name for the bot. */
 export const UNIT = "telegram-claude.service";
 
+/** Oneshot unit taking one database snapshot. */
+export const BACKUP_UNIT = "telegram-claude-backup.service";
+
+/** Timer firing the snapshot unit once a day. */
+export const BACKUP_TIMER = "telegram-claude-backup.timer";
+
 export interface ServicePaths {
+  backupScriptPath: string;
+  backupTimerPath: string;
+  backupUnitPath: string;
   bunPath: string;
   configDir: string;
   entryPath: string;
@@ -57,16 +66,20 @@ export const detectPaths = (): ServicePaths => {
       ].filter((d): d is string => Boolean(d))
     ),
   ];
+  const unitDir = resolve(configDir, "systemd/user");
   return {
     bunPath,
     repoDir,
     entryPath: resolve(repoDir, "src/index.ts"),
+    backupScriptPath: resolve(repoDir, "scripts/backup-db.ts"),
     envFile: resolve(repoDir, ".env"),
     user,
     home,
     configDir,
     pathDirs,
-    unitPath: resolve(configDir, "systemd/user", UNIT),
+    unitPath: resolve(unitDir, UNIT),
+    backupUnitPath: resolve(unitDir, BACKUP_UNIT),
+    backupTimerPath: resolve(unitDir, BACKUP_TIMER),
   };
 };
 
@@ -94,4 +107,39 @@ Environment=PATH=${p.pathDirs.join(":")}
 
 [Install]
 WantedBy=default.target
+`;
+
+/**
+ * Oneshot unit running one database snapshot. Same absolute-path rendering as
+ * the bot unit; no [Install] section, since the timer is what gets enabled.
+ */
+export const renderBackupUnit = (p: ServicePaths) =>
+  `[Unit]
+Description=Telegram Claude Bot database backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=${p.repoDir}
+EnvironmentFile=-${p.envFile}
+ExecStart=${p.bunPath} run ${p.backupScriptPath}
+Environment=PATH=${p.pathDirs.join(":")}
+`;
+
+/**
+ * Daily timer for the snapshot unit. `Persistent=true` catches up on a run
+ * missed while the VPS (or the user session) was down; the randomized delay
+ * keeps the snapshot off the exact minute every other daily timer fires.
+ */
+export const renderBackupTimer = () =>
+  `[Unit]
+Description=Daily Telegram Claude Bot database backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=900
+Unit=${BACKUP_UNIT}
+
+[Install]
+WantedBy=timers.target
 `;

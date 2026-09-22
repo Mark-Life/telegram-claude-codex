@@ -108,6 +108,7 @@ const makeOpts = (userId: number): RunOptions => ({
   projectDir: "/tmp",
   prompt: "",
   sessionId: "session-1",
+  threadId: null,
   userId,
 });
 
@@ -184,7 +185,9 @@ describe("compaction driven through the run registry", () => {
       const folded = foldCompactEvents(drainQueue(rt, queue));
       expect(await waitUntil(() => started)).toBe(true);
 
-      expect(await rt.runPromise(stopRun(5002, "stopped"))).toBe(true);
+      expect(await rt.runPromise(stopRun(makeOpts(5002), "stopped"))).toBe(
+        true
+      );
       expect(await folded).toEqual({
         kind: "compact_failed",
         reason: "Stopped.",

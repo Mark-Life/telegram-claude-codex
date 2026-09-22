@@ -18,6 +18,7 @@ import type {
   AgentEvent,
   AgentProvider,
   CompactEvent,
+  RunKey,
   RunOptions,
 } from "./types";
 
@@ -173,18 +174,24 @@ function* handleToolUseBlock(
 /**
  * Map a complete assistant message's content blocks. tool_use (and plan_ready)
  * always emit here; text/thinking are only emitted as a fallback when no partial
- * stream was seen, since the streamed deltas already carried them.
+ * stream was seen, since the streamed deltas already carried them. A message
+ * that spoke closes with `text_end`: this message is where one assistant reply
+ * ends, so the chat keeps the next one separate.
  */
 function* handleAssistantBlocks(
   state: ParserState,
   content: AssistantBlock[],
   sawStreamEvents: boolean
 ): Generator<AgentEvent> {
+  let spoke = false;
   for (const block of content) {
     if (block.type === "tool_use") {
       yield* handleToolUseBlock(state, block);
-    } else if (!sawStreamEvents && block.type === "text" && block.text) {
-      yield { kind: "text_delta", text: block.text };
+    } else if (block.type === "text" && block.text) {
+      spoke = true;
+      if (!sawStreamEvents) {
+        yield { kind: "text_delta", text: block.text };
+      }
     } else if (!sawStreamEvents && block.type === "thinking") {
       yield { kind: "thinking_start" };
       if (block.thinking) {
@@ -192,6 +199,9 @@ function* handleAssistantBlocks(
       }
       yield { kind: "thinking_done", durationMs: 0 };
     }
+  }
+  if (spoke) {
+    yield { kind: "text_end" };
   }
 }
 
@@ -240,12 +250,20 @@ function* handleResultMessage(msg: ResultMessage): Generator<AgentEvent> {
 
 const SCRIPT_DIR = new URL("../../scripts", import.meta.url).pathname;
 
-/** Build the system-prompt snippet telling Claude how to send files to `chatId`. */
-const buildFileSystemPrompt = (chatId: number) => {
+/**
+ * Build the system-prompt snippet telling Claude how to send files back to the
+ * conversation the run came from. In a forum topic the thread id has to ride
+ * along or the document lands in General.
+ */
+const buildFileSystemPrompt = ({ chatId, threadId }: RunKey) => {
   const scriptPath = `${SCRIPT_DIR}/send-file-to-user.ts`;
+  const target =
+    threadId === null
+      ? `--chat ${chatId}`
+      : `--chat ${chatId} --thread ${threadId}`;
   return [
     "You can send files to the user's Telegram chat.",
-    `To send a file, run: bun ${scriptPath} --path <absolute-file-path> --chat ${chatId}`,
+    `To send a file, run: bun ${scriptPath} --path <absolute-file-path> ${target}`,
     "Only use this when the user explicitly asks you to send/share/download a file.",
     "The script blocks .env and other sensitive files automatically.",
   ].join(" ");
@@ -287,7 +305,7 @@ const buildOptions = (
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: buildFileSystemPrompt(opts.chatId),
+      append: buildFileSystemPrompt(opts),
     },
   };
   if (opts.model && opts.model !== "default") {

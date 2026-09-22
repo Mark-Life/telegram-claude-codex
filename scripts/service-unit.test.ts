@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { detectPaths, renderUnit, UNIT } from "./service-unit";
+import {
+  BACKUP_UNIT,
+  detectPaths,
+  renderBackupTimer,
+  renderBackupUnit,
+  renderUnit,
+  UNIT,
+} from "./service-unit";
 
 const SHELL_VAR = /\$\{?[A-Za-z]/;
 const HOME_TILDE = /(^|[^/])~\//;
@@ -20,6 +27,21 @@ test("renderUnit has no shell placeholders and optional env file", () => {
   expect(unit).toContain("EnvironmentFile=-");
   expect(unit).toContain("WantedBy=default.target");
   expect(unit).toContain("Type=simple");
+});
+
+test("backup units render a daily oneshot with absolute paths", () => {
+  const p = detectPaths();
+  const unit = renderBackupUnit(p);
+  expect(unit).not.toMatch(SHELL_VAR);
+  expect(unit).toContain("Type=oneshot");
+  expect(unit).toContain(`ExecStart=${p.bunPath} run ${p.backupScriptPath}`);
+  expect(p.backupScriptPath.endsWith("/scripts/backup-db.ts")).toBe(true);
+
+  const timer = renderBackupTimer();
+  expect(timer).toContain("OnCalendar=daily");
+  expect(timer).toContain("Persistent=true");
+  expect(timer).toContain(`Unit=${BACKUP_UNIT}`);
+  expect(timer).toContain("WantedBy=timers.target");
 });
 
 test("renderUnit PATH contains the bun bin dir", () => {

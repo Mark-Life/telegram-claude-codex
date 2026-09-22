@@ -9,8 +9,20 @@ import {
   ProcessFailed,
   ProviderCrashed,
 } from "./errors";
-import { hasRun, RunRegistry, startRun, stopRun } from "./run-registry";
-import type { AgentEvent, EventQueue, ProviderSpec, RunOptions } from "./types";
+import {
+  hasRun,
+  RunRegistry,
+  runKeyOf,
+  startRun,
+  stopRun,
+} from "./run-registry";
+import type {
+  AgentEvent,
+  EventQueue,
+  ProviderSpec,
+  RunKey,
+  RunOptions,
+} from "./types";
 
 /**
  * Builds an isolated RunRegistry runtime backed by a literal AppConfig so tests
@@ -60,10 +72,21 @@ const makeSpec = (script: string): ProviderSpec => ({
     },
 });
 
-const makeOpts = (userId: number): RunOptions => ({
+const makeOpts = (
+  userId: number,
+  threadId: number | null = null
+): RunOptions => ({
   chatId: userId,
   projectDir: process.cwd(),
   prompt: "",
+  threadId,
+  userId,
+});
+
+/** The RunKey half of makeOpts, for stop/has assertions. */
+const keyOf = (userId: number, threadId: number | null = null): RunKey => ({
+  chatId: userId,
+  threadId,
   userId,
 });
 
@@ -144,7 +167,7 @@ describe("RunRegistry.stop on unknown user", () => {
     try {
       // stopAgent() in agent/index.ts is `runtime.runSync(stopRun(...))`; this
       // exercises the same registry path without the global runtime.
-      const stopped = await rt.runPromise(stopRun(424_242, "stopped"));
+      const stopped = await rt.runPromise(stopRun(keyOf(424_242), "stopped"));
       expect(stopped).toBe(false);
     } finally {
       await rt.dispose();
@@ -161,9 +184,9 @@ describe("RunRegistry — subprocess lifecycle (fake sh provider)", () => {
       );
       // Wait for the stream to actually start (permit acquired, process live).
       expect((await takeEvent(rt, queue)).kind).toBe("text_delta");
-      expect(await rt.runPromise(hasRun(1001))).toBe(true);
+      expect(await rt.runPromise(hasRun(keyOf(1001)))).toBe(true);
 
-      const stopped = await rt.runPromise(stopRun(1001, "stopped"));
+      const stopped = await rt.runPromise(stopRun(keyOf(1001), "stopped"));
       expect(stopped).toBe(true);
 
       const terminal = await takeEvent(rt, queue);
@@ -200,14 +223,14 @@ describe("RunRegistry — subprocess lifecycle (fake sh provider)", () => {
   test("(c) hasRun tracks the map lifecycle: false → true → false on natural exit", async () => {
     const rt = makeRuntime(4);
     try {
-      expect(await rt.runPromise(hasRun(1003))).toBe(false);
+      expect(await rt.runPromise(hasRun(keyOf(1003)))).toBe(false);
       await rt.runPromise(
         startRun(makeSpec("echo hi; sleep 0.1"), makeOpts(1003))
       );
-      expect(await rt.runPromise(hasRun(1003))).toBe(true);
+      expect(await rt.runPromise(hasRun(keyOf(1003)))).toBe(true);
       // Fiber completes on natural exit → FiberMap auto-removes the entry.
       const cleared = await waitUntil(
-        async () => !(await rt.runPromise(hasRun(1003)))
+        async () => !(await rt.runPromise(hasRun(keyOf(1003))))
       );
       expect(cleared).toBe(true);
     } finally {
@@ -228,11 +251,11 @@ describe("RunRegistry — subprocess lifecycle (fake sh provider)", () => {
       // are running at the same time.
       expect((await takeEvent(rt, q1)).kind).toBe("text_delta");
       expect((await takeEvent(rt, q2)).kind).toBe("text_delta");
-      expect(await rt.runPromise(hasRun(2001))).toBe(true);
-      expect(await rt.runPromise(hasRun(2002))).toBe(true);
+      expect(await rt.runPromise(hasRun(keyOf(2001)))).toBe(true);
+      expect(await rt.runPromise(hasRun(keyOf(2002)))).toBe(true);
 
-      await rt.runPromise(stopRun(2001, "stopped"));
-      await rt.runPromise(stopRun(2002, "stopped"));
+      await rt.runPromise(stopRun(keyOf(2001), "stopped"));
+      await rt.runPromise(stopRun(keyOf(2002), "stopped"));
     } finally {
       await rt.dispose();
     }
@@ -258,9 +281,78 @@ describe("RunRegistry — subprocess lifecycle (fake sh provider)", () => {
         expect(terminal.message).toBe("Busy, try again shortly.");
       }
       // The incumbent run was untouched by the capacity rejection.
-      expect(await rt.runPromise(hasRun(3001))).toBe(true);
+      expect(await rt.runPromise(hasRun(keyOf(3001)))).toBe(true);
 
-      await rt.runPromise(stopRun(3001, "stopped"));
+      await rt.runPromise(stopRun(keyOf(3001), "stopped"));
+    } finally {
+      await rt.dispose();
+    }
+  }, 15_000);
+});
+
+describe("runKeyOf", () => {
+  test("a chat outside any topic collapses to the main slot", () => {
+    expect(runKeyOf({ userId: 7, chatId: -100, threadId: null })).toBe(
+      "7:-100:main"
+    );
+  });
+
+  test("topics of one chat get distinct slots", () => {
+    const a = runKeyOf({ userId: 7, chatId: -100, threadId: 3 });
+    const b = runKeyOf({ userId: 7, chatId: -100, threadId: 4 });
+    expect(a).toBe("7:-100:3");
+    expect(a).not.toBe(b);
+  });
+});
+
+describe("RunRegistry — one slot per conversation", () => {
+  test("a second run in the same topic pre-empts the first", async () => {
+    const rt = makeRuntime(4);
+    const key = keyOf(4001, 9);
+    try {
+      const q1 = await rt.runPromise(
+        startRun(makeSpec("echo first; sleep 30"), makeOpts(4001, 9))
+      );
+      expect((await takeEvent(rt, q1)).kind).toBe("text_delta");
+
+      await rt.runPromise(
+        startRun(makeSpec("echo second; sleep 30"), makeOpts(4001, 9))
+      );
+      // The pre-empted run's queue ends with the interrupt copy.
+      const terminal = await takeEvent(rt, q1);
+      expect(terminal.kind).toBe("error");
+      if (terminal.kind === "error") {
+        expect(terminal.class?._tag).toBe("AgentInterrupted");
+      }
+      expect(await rt.runPromise(hasRun(key))).toBe(true);
+
+      await rt.runPromise(stopRun(key, "stopped"));
+    } finally {
+      await rt.dispose();
+    }
+  }, 15_000);
+
+  test("two topics of one chat run in parallel and stop independently", async () => {
+    const rt = makeRuntime(4);
+    try {
+      const q1 = await rt.runPromise(
+        startRun(makeSpec("echo one; sleep 30"), makeOpts(4002, 11))
+      );
+      const q2 = await rt.runPromise(
+        startRun(makeSpec("echo two; sleep 30"), makeOpts(4002, 12))
+      );
+      expect((await takeEvent(rt, q1)).kind).toBe("text_delta");
+      expect((await takeEvent(rt, q2)).kind).toBe("text_delta");
+
+      expect(await rt.runPromise(stopRun(keyOf(4002, 11), "stopped"))).toBe(
+        true
+      );
+      // Stopping one topic leaves its sibling running.
+      expect(await rt.runPromise(hasRun(keyOf(4002, 12)))).toBe(true);
+      // ...and the chat outside the topics never had a run at all.
+      expect(await rt.runPromise(hasRun(keyOf(4002)))).toBe(false);
+
+      await rt.runPromise(stopRun(keyOf(4002, 12), "stopped"));
     } finally {
       await rt.dispose();
     }

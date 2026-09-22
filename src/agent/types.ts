@@ -8,6 +8,12 @@ export type ProviderId = "claude" | "codex";
 export type AgentEvent =
   | { kind: "session_init"; sessionId: string }
   | { kind: "text_delta"; text: string }
+  /**
+   * The assistant message the preceding deltas belong to is complete. Any
+   * further text starts a new chat message, so a turn that speaks, works, then
+   * speaks again does not collapse into one wall of text.
+   */
+  | { kind: "text_end" }
   | { kind: "tool_use"; name: string; input: string }
   | { kind: "thinking_start" }
   | { kind: "thinking_delta"; text: string }
@@ -50,9 +56,19 @@ export type CompactEvent = Extract<
 /** The event queue bridged from an Effect producer fiber to the AsyncGenerator consumer. */
 export type EventQueue = Queue.Queue<AgentEvent, Cause.Done>;
 
-/** Options passed to a provider run, normalized across providers */
-export interface RunOptions {
+/**
+ * Identifies the conversation a run belongs to. Forum topics are separate
+ * conversations, so they get separate run slots; `threadId: null` is the chat
+ * outside any topic.
+ */
+export interface RunKey {
   chatId: number;
+  threadId: number | null;
+  userId: number;
+}
+
+/** Options passed to a provider run, normalized across providers */
+export interface RunOptions extends RunKey {
   /** Reasoning-effort override; `undefined` or `"default"` uses the provider default. */
   effort?: string;
   /** Model override; `undefined` or `"default"` uses the provider default. */
@@ -60,7 +76,6 @@ export interface RunOptions {
   projectDir: string;
   prompt: string;
   sessionId?: string;
-  userId: number;
 }
 
 /** A selectable option (model or reasoning effort). `id` `"default"` clears any override. */
