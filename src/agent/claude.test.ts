@@ -32,7 +32,7 @@ const foldMessages = (messages: unknown[]) => {
 };
 
 // The message shapes below are verbatim from a real `/compact` run against
-// claude-agent-sdk 0.3.220 (trimmed to the fields the fold reads).
+// claude-agent-sdk 0.3.280 (trimmed to the fields the fold reads).
 test("compaction that ran reports the boundary's token counts", () => {
   expect(
     foldMessages([

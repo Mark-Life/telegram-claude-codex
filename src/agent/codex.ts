@@ -382,7 +382,7 @@ export const codexProvider: AgentProvider = {
   kind: "sdk",
   displayName: "Codex",
   capabilities: {
-    // The Codex SDK (0.146.0) exposes no compaction API: the whole surface is
+    // The Codex SDK (0.155.1) exposes no compaction API: the whole surface is
     // Codex.startThread/resumeThread plus Thread.run/runStreamed, and no
     // ThreadEvent reports one. `codex exec` has no flag for it either, and its
     // slash commands are TUI-only — so /compact declines for Codex rather than
@@ -399,12 +399,18 @@ export const codexProvider: AgentProvider = {
     { id: "gpt-5.6-terra", label: "Terra (balanced)" },
     { id: "gpt-5.6-luna", label: "Luna (fast)" },
   ],
+  // One entry per member of the SDK's `ModelReasoningEffort`; 0.155.1 added
+  // the top three. The CLI forwards the string verbatim, so anything the type
+  // admits reaches the API.
   effortLevels: [
     { id: "minimal", label: "Minimal" },
     { id: "low", label: "Low" },
     { id: "medium", label: "Medium" },
     { id: "high", label: "High" },
     { id: "xhigh", label: "Extra high" },
+    { id: "max", label: "Max" },
+    { id: "ultra", label: "Ultra" },
+    { id: "persistent", label: "Persistent" },
   ],
   defaultEffort: "medium",
   run,

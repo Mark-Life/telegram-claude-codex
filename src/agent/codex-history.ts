@@ -67,9 +67,46 @@ const readHeadLines = (filePath: string): string[] => {
 };
 
 /**
+ * Context blocks Codex injects as user-role turns before the real prompt.
+ * They are the agent's own scaffolding, never something the operator typed, so
+ * they must not become a session's summary.
+ */
+const INJECTED_CONTEXT_RE = /^<(environment_context|user_instructions)\b/;
+
+/**
+ * The operator's prompt out of a `response_item` message, or "" when the item
+ * is not one. Codex 0.155.x stopped emitting the `event_msg`/`user_message`
+ * event that used to carry it, so the prompt now only survives as a user-role
+ * message whose `content` is an array of `input_text` parts.
+ */
+export const userPromptFromResponseItem = (obj: {
+  payload?: { content?: unknown; role?: unknown; type?: unknown };
+  type?: unknown;
+}): string => {
+  const payload = obj.payload;
+  if (
+    obj.type !== "response_item" ||
+    payload?.type !== "message" ||
+    payload.role !== "user" ||
+    !Array.isArray(payload.content)
+  ) {
+    return "";
+  }
+  const text = payload.content
+    .map((part: { text?: unknown }) =>
+      typeof part?.text === "string" ? part.text : ""
+    )
+    .join("")
+    .trim();
+  return INJECTED_CONTEXT_RE.test(text) ? "" : text;
+};
+
+/**
  * Parse a Codex rollout file head into session metadata.
- * Pulls id/cwd/timestamp from `session_meta` and the first user prompt
- * (an `event_msg` with `payload.type === "user_message"`) as the summary.
+ * Pulls id/cwd/timestamp from `session_meta` and the first user prompt as the
+ * summary — from the `event_msg`/`user_message` event that Codex ≤0.146 wrote,
+ * falling back to the user-role `response_item` that replaced it in 0.155.x.
+ * Both are read so rollouts already on disk keep listing after an SDK bump.
  */
 const parseRolloutHead = (
   filePath: string,
@@ -96,6 +133,8 @@ const parseRolloutHead = (
         typeof obj.payload.message === "string"
       ) {
         summary = obj.payload.message;
+      } else if (!summary) {
+        summary = userPromptFromResponseItem(obj);
       }
       if (sessionId && projectPath && summary) {
         break;
