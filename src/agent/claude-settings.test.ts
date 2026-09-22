@@ -16,6 +16,14 @@ describe("claude-settings", () => {
     expect(deny).toContain("EnterPlanMode");
   });
 
+  test("denies the tools 0.3.280 added that reach past the headless agent", () => {
+    const deny = DEFAULT_CLAUDE_SETTINGS.permissions?.deny ?? [];
+    // Opens an approval dialog with nobody on the other side.
+    expect(deny).toContain("ProposeGoal");
+    // Drains an inbound webhook/trigger queue into the run.
+    expect(deny).toContain("ReadNotifications");
+  });
+
   test("top-level override keys replace wholesale", () => {
     const merged = mergeClaudeSettings(DEFAULT_CLAUDE_SETTINGS, {
       effortLevel: "low",

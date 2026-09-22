@@ -484,6 +484,14 @@ export const claudeProvider: AgentProvider = {
     { id: "haiku", label: "Haiku" },
     { id: "fable", label: "Fable" },
   ],
+  // No "max" entry. The SDK has a `'max'` effort, but only through the
+  // session-scoped `applyFlagSettings` control request — `Settings.effortLevel`
+  // excludes it because it is never written to a settings file, and this
+  // provider sets effort via `options.settings`. Passing "max" there is dropped
+  // like any unrecognized value and the run silently falls back to the model
+  // default (verified against 0.3.280: "low"/"high"/"xhigh" are recorded in the
+  // transcript as given, "max" comes back as "medium"). Reaching it would mean
+  // routing effort through `applyFlagSettings` on the live query handle.
   effortLevels: [
     { id: "low", label: "Low" },
     { id: "medium", label: "Medium" },

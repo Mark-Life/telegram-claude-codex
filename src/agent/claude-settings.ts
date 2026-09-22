@@ -7,7 +7,11 @@ import type { Settings } from "@anthropic-ai/claude-agent-sdk";
  *
  * It trims interactive / harness tools that make no sense for a headless
  * Telegram agent (it cannot prompt the operator, schedule wakeups, or drive
- * cron/remote surfaces) and turns off bundled skills, remote control,
+ * cron/remote surfaces). `ProposeGoal` is denied on the first count — it opens
+ * an approval dialog there is nobody to answer — and `ReadNotifications` on the
+ * second: it drains an inbound queue fed by GitHub webhooks, trigger fires and
+ * `mcp_send_message`, which is both an outward surface and a way for untrusted
+ * text to enter the run. It also turns off bundled skills, remote control,
  * artifacts, and the claude.ai cloud MCP connectors that would otherwise be
  * auto-fetched from the logged-in account (Notion, Canva, Gmail, …).
  * Plan mode is denied by default (`EnterPlanMode`/`ExitPlanMode`),
@@ -23,9 +27,11 @@ export const DEFAULT_CLAUDE_SETTINGS: Settings = {
       "ExitPlanMode",
       "NotebookEdit",
       "AskUserQuestion",
+      "ProposeGoal",
       "SendMessage",
       "PushNotification",
       "RemoteTrigger",
+      "ReadNotifications",
       "DesignSync",
       "ReportFindings",
       "ScheduleWakeup",

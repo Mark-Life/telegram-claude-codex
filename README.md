@@ -186,7 +186,7 @@ Use `/provider` to pick between Claude Code and OpenAI Codex via an inline keybo
 
 Long conversations eventually fill the context window. `/compact` summarizes the active project's session for the active provider in place: the session id is unchanged, so the next message continues the same conversation instead of starting over as `/new` would. A run in flight is stopped first (as with `/new`), and the reply quotes the context size before and after when the provider reports it.
 
-Only Claude Code supports it — the Agent SDK reaches the CLI's own compaction by sending `/compact` as the prompt for the resumed session, and reports the result on a `compact_boundary` message. The Codex SDK (0.146.0) exposes no compaction API, so `/compact` declines for Codex and points at `/new` rather than clearing anything.
+Only Claude Code supports it — the Agent SDK reaches the CLI's own compaction by sending `/compact` as the prompt for the resumed session, and reports the result on a `compact_boundary` message. The Codex SDK (0.155.1) exposes no compaction API, so `/compact` declines for Codex and points at `/new` rather than clearing anything.
 
 ### Compose Mode
 
