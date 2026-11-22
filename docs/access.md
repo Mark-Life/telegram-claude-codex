@@ -2,39 +2,117 @@
 
 ## Who may use the bot
 
-Three things decide what a run may do: the owner id from `.env`, the tier stored in the `users` table, and the surface the message came from.
+The owner id in `.env`, the tier in the `users` table and the chat type set what a run may do.
 
 | Tier | Comes from | In private chat |
 | --- | --- | --- |
-| `owner` | `ALLOWED_USER_ID` | full access to the machine, real project directories, account apps/plugins, Executor and other MCP servers; sessions kept |
-| `executor` | `users` table | owner execution profile and external tools in private chat, the owner's Telegram account included; sessions kept; no owner-only management |
-| `member` | `users` table | read/write inside `.data/scratch/<user id>`, no account apps, plugins or MCP servers; with `bwrap`, inside the sandbox view, where each message starts a new conversation; on Claude only with both `bwrap` and `socat`, and the view holds Claude's login file |
-| `guest` | no row — the default | a light run, like a group run, in `.data/scratch/<user id>`, 30 a day by default; ignored silently when `/settings` has Guests off |
+| `owner` | `ALLOWED_USER_ID` | Full machine access, real project directories, account apps/plugins, Executor and other MCP servers. Sessions kept. |
+| `executor` | `users` table | Owner execution profile and external tools, owner's Telegram account included. Sessions kept. No owner-only management. |
+| `member` | `users` table | Read/write in `.data/scratch/<user id>`. No account apps, plugins or MCP servers. With `bwrap`: sandbox view, new conversation per message. On Claude it needs `bwrap` and `socat`, and the view holds Claude's login file. |
+| `guest` | No row (default) | Light run in `.data/scratch/<user id>`, 30 a day by default. Ignored silently when `/settings` has Guests off. |
 
-Owner and `executor` runs leave the scratch directory and use the configured real working directory. This execution access does not grant owner identity: only `ALLOWED_USER_ID` resolves to `owner`, and owner-only management remains unavailable to stored tiers.
+Owner and `executor` runs use the real working directory. Only `ALLOWED_USER_ID` is the owner.
 
-Anyone who writes to the bot in a private chat is a guest and gets a light run, which spends tokens. To stop that, the owner turns Guests off in `/settings`. Then every private update from a guest — text, voice, files, commands, button presses — is dropped before any handler: no reply, no transcription, no run. The log keeps one line with the user id, never the text. Members, executors, groups and Business replies are not affected. The switch is the `guests` row of `settings` (`off`; no row or `on` lets guests in) and takes effect at once. A member or executor whose row cannot be read counts as a guest, so with Guests off a db failure drops them too; the log then shows `Tier lookup failed` before the guest line.
+Anyone who writes to the bot in private is a guest, and guest runs spend tokens. To stop them, turn Guests off in `/settings`. The bot then drops every private update from a guest before any handler: text, voice, files, commands, button presses. No reply, no transcription, no run. The log keeps the user id, never the text.
 
-Owner-only management, from the chat: `/users` lists everyone with buttons to change tier or remove them, `/grant <id> <executor|member>` adds someone by numeric user id (the person sees theirs in the bot's `/start`; the Bot API cannot resolve a private user's `@username`, so it is not accepted), and replying to their message with `/grant <executor|member>` works too. `/revoke <id>` or a reply drops them. A typed id always wins over the reply: inside a topic every message carries the topic root as its reply, so only a reply to someone else's message counts. The owner's own id is refused — the owner tier lives in `.env`. The same table can be edited by a run through `packages/agent/scripts/users-cli.ts`; only the owner's runs are pointed at its skill, `packages/agent/skills/bot-access/SKILL.md`. Every change is appended to `.data/events.jsonl` with who made it.
+Members, executors, groups and Business replies are not affected. The switch is the `guests` row of `settings` (`off` blocks; no row or `on` allows) and applies at once. If a member's or executor's row cannot be read, they count as a guest. With Guests off, a db failure drops them too, and the log shows `Tier lookup failed`.
 
-**HTTP API keys.** The owner and executors can make keys for the [HTTP API](http-api.md) with `/apikeys`. A key names its holder, never a tier: the tier is read on every request the same way as in the chat, so demoting or revoking a person disables their keys at once. Keys live in the `api_keys` table, the secret only as a hash; the access watcher reports any key that appears, moves or changes there without the bot, like a tier change.
+### Manage users
 
-**Groups.** Add the bot to any other group and it first checks that the owner is a member; if not it leaves immediately and silently. The answer is cached in the `groups` table and re-checked daily, and an API failure is treated as "unknown" so a Telegram blip never causes a leave.
+Owner only.
 
-Inside an owner-present group everyone is equal and every run is lightweight, the owner included: a model with web search, no file edits or account apps/plugins, quiet rendering, and a session that is thrown away. The bot records group text, voice transcripts, and photos and documents in SQLite without starting an agent: a file is recorded as a marker with its caption (`[photo ×6] caption`, `[document: a.pdf]`), and an album as one message once all its items arrived. A file is downloaded only when the message carrying it, or a message replying to it, is answered; a file with no caption is answered only when it replies to one of the bot's messages, like a typed reply. A GIF or a video is recorded but never downloaded: with a caption the caption is judged as usual and the run is told it cannot see the file; without one it is only recorded. It lands in the group's own directory, `.data/groups/<chat id>`, where every group run works read-only; a group run never sees another group's directory or a member's private scratch. Files there are kept 7 days and removed with the directory when the bot leaves the group. Only a run inside the sandbox view opens them (Codex with `bwrap`); on Claude and pi, or without `bwrap`, the bot hands the images to the model inside the message instead (photos, and documents Telegram names an image type; 5 MB each and 20 MB a message at most), and the run is told any other file is there and that it cannot open it. A run starts only for an `@mention`, a reply to one of the bot's messages, or its call name, set with `/callname <name>` (owner-only) and matched through Russian declensions (with no name set, the bot answers to both «Ассистент» and «Assistant»), then confirmed by an address judge that reads the last ten messages. The judge is TypeSafe Jev: it returns the probability that the bot was spoken to, and the bot answers from `0.75` up in a group, `0.8` in a Business chat. Without `TYPESAFE_API_KEY`, or when that call fails, a one-turn pass on the helper provider (Codex, Claude or pi, or the one picked in «Helpers» of `/settings`) decides instead. The run receives the latest 30 messages and durable facts, plus a narrow search/fact interface physically locked to the current `chat_id`; it cannot name or inspect another chat. Group voice messages are transcribed silently, so ordinary voice chatter gets no bot reply. Group runs are capped at 30 per person per day and 100 a day in total by default, counted in the database so a restart does not reset them; the owner is exempt. The owner changes all four daily budgets, group and private, in `/settings` (see [Settings](usage.md#settings)).
+| Command | Does |
+| --- | --- |
+| `/users` | Lists everyone, with buttons to change tier or remove. |
+| `/grant <id> <executor\|member>` | Adds a person by numeric user id. |
+| `/grant <executor\|member>` as a reply | Adds the author of the replied message. |
+| `/revoke <id>`, or as a reply | Removes a person. |
+
+- The person sees their id in the bot's `/start`. `@username` does not work: the Bot API cannot resolve it.
+- A typed id wins over a reply. In a topic every message replies to the topic root, so only a reply to someone else's message counts.
+- The owner's own id is refused. The owner tier lives in `.env`.
+- A run can edit the table with `packages/agent/scripts/users-cli.ts`. Only owner runs are pointed at its skill, `packages/agent/skills/bot-access/SKILL.md`.
+- Every change goes to `.data/events.jsonl` with who made it.
+
+### HTTP API keys
+
+The owner and executors make keys for the [HTTP API](http-api.md) with `/apikeys`. A key names its holder, not a tier. The tier is read on every request, so demoting or revoking a person disables their keys at once.
+
+Keys live in the `api_keys` table, secret as a hash only. The access watcher reports any key that appears, moves or changes without the bot, like a tier change.
+
+### Groups
+
+The bot silently leaves any group where the owner is not a member. The check is cached in the `groups` table and repeated daily. An API failure counts as "unknown", so it never causes a leave.
+
+In an owner-present group everyone is equal, the owner too. Every run is lightweight: web search, no file edits, no account apps or plugins, quiet rendering, session thrown away.
+
+**Recording.** The bot stores group text, voice transcripts, photos and documents in SQLite. No agent starts for them.
+
+- A file is stored as a marker with its caption: `[photo ×6] caption`, `[document: a.pdf]`. An album is one message.
+- A file is downloaded only when its message, or a reply to it, is answered. A file with no caption is answered only as a reply to one of the bot's messages.
+- A GIF or video is never downloaded. With a caption, the caption is judged as usual and the run is told it cannot see the file. Without one, it is only recorded.
+
+Files land in `.data/groups/<chat id>`, read-only for group runs. A run never sees another group's directory or a member's scratch. Files are kept 7 days, and removed when the bot leaves.
+
+Only a run in the sandbox view (Codex with `bwrap`) opens them. On Claude and pi, or without `bwrap`, the bot passes images inline: photos and documents Telegram marks as images, 5 MB each, 20 MB a message at most. The run is told other files are there but it cannot open them.
+
+**Triggers.** A run starts only for:
+
+- an `@mention`;
+- a reply to one of the bot's messages;
+- its call name, set with `/callname <name>` (owner only), matched through Russian declensions. With no name set: «Ассистент» and «Assistant».
+
+An address judge then confirms. It reads the last ten messages.
+
+| Item | Value |
+| --- | --- |
+| Judge | TypeSafe Jev: probability that the bot was spoken to |
+| Threshold, group | `0.75` and up |
+| Threshold, Business chat | `0.8` and up |
+| Fallback | One-turn pass on the helper provider (Codex, Claude or pi, or the one picked in «Helpers» of `/settings`). Used without `TYPESAFE_API_KEY` or when the call fails. |
+
+**Limits.** The run gets the latest 30 messages and durable facts. Its search and facts are locked to the current `chat_id`: it cannot name or inspect another chat. Voice is transcribed silently, so ordinary voice chatter gets no reply.
+
+| Limit                         | Default |
+| ----------------------------- | ------- |
+| Group runs per person per day | 30      |
+| Group runs per day, total     | 100     |
+
+A restart keeps the counts. The owner is exempt and changes all four daily budgets, group and private, in `/settings` (see [Settings](usage.md#settings)).
 
 ## Sandbox view
 
-**bubblewrap** (`bwrap`), for the sandbox view. `apt install bubblewrap`. Every run that is not full access — groups, guests, members, Business replies, the helper passes — then starts inside a view where the root is read-only, the home directories and this repo are empty, `.env`, `.data` and every provider's login are hidden, `/tmp` is private, `/var/log` is hidden and the run sees only its own processes. At boot the bot logs `Sandbox view: <path>`, or a warning when `bwrap` is missing or cannot create namespaces on this host (some kernels and AppArmor policies forbid it for unprivileged users). Without it Codex runs as before, under its own sandbox only, which still lets a light run read every file the service account can. Owner, executor and task runs are never wrapped. Inside the view Codex sees only `~/.codex/auth.json`, not `config.toml`: a light run uses the built-in OpenAI provider, so a Codex set up with another `model_provider` or a keyring login (`cli_auth_credentials_store`) fails its light runs once `bwrap` is installed. **socat**, for the sandbox view's network. `apt install socat`. With it, each view gets its own network namespace with only loopback. The one way out is a proxy the bot runs: it opens HTTPS tunnels only to the provider's own hosts (for Codex: `api.openai.com`, `auth.openai.com`, `chatgpt.com`), and never to an address on loopback, the LAN or the tailnet. So a light run cannot reach local services such as a dev server, a browser debug port or VNC. The boot log line reads `Sandbox view: <bwrap>, network through <socat>`. Without `socat`, or when the bot's env sets `HTTPS_PROXY` or `HTTP_PROXY` (the view's proxy dials directly and would skip it), it reads `host network` and a warning says why: views then share the host's network, so ports on `127.0.0.1` and abstract unix sockets stay reachable, and only Codex's own sandbox keeps the model's shell offline. Refused connections are logged as `Sandbox network refused`, once per host and port per run, at most 32 per run.
+Every run that is not full access starts in the view: groups, guests, members, Business replies, helper passes. Owner, executor and task runs are never wrapped.
+
+| Package | Install | Gives |
+| --- | --- | --- |
+| **bubblewrap** (`bwrap`) | `apt install bubblewrap` | The view |
+| **socat** | `apt install socat` | A restricted network for the view |
+
+**With `bwrap`:** root is read-only. Home directories and this repo are empty. `.env`, `.data` and every provider's login are hidden. `/tmp` is private, `/var/log` is hidden, and the run sees only its own processes.
+
+The boot log says `Sandbox view: <path>`. It warns if `bwrap` is missing or cannot create namespaces (some kernels and AppArmor policies forbid it for unprivileged users).
+
+Without `bwrap`, Codex runs under its own sandbox only. A light run can read every file the service account can.
+
+Codex caveat: the view holds only `~/.codex/auth.json`, not `config.toml`. With another `model_provider` or a keyring login (`cli_auth_credentials_store`), light runs fail once `bwrap` is installed.
+
+**With `socat`:** each view gets its own network namespace, loopback only. The one way out is a bot-run proxy. It opens HTTPS tunnels only to the provider's hosts (Codex: `api.openai.com`, `auth.openai.com`, `chatgpt.com`). It never connects to loopback, the LAN or the tailnet, so a light run cannot reach a dev server, a browser debug port or VNC. The boot log reads `Sandbox view: <bwrap>, network through <socat>`.
+
+Refused connections log as `Sandbox network refused`, once per host and port, at most 32 per run.
+
+**Host network fallback.** The log reads `host network`, with a warning, when `socat` is missing or the bot's env sets `HTTPS_PROXY` or `HTTP_PROXY` (the view's proxy dials directly and would bypass it). Views then share the host network. Ports on `127.0.0.1` and abstract unix sockets stay reachable. Only Codex's own sandbox keeps the shell offline.
 
 ## Forum supergroup (optional, recommended)
 
-Threads let the owner hold several conversations at once, each with its own session, queue and draft, running in parallel.
+Threads let the owner hold several conversations at once. Each has its own session, queue and draft, and they run in parallel.
 
-1. Create a supergroup, open its settings and turn **Topics** on.
-2. Add the bot and make it an **administrator** with permission to manage topics (an admin sees every message regardless of privacy mode).
-3. Create normal conversation topics yourself — one per subject. The bot routes whatever topic it sees; when a reminder becomes due, it creates that reminder's own topic automatically.
-4. **Send `/setworkspace` in the group.** Only the owner may, and only that command records the group as the workspace, in the `workspace_chat_id` row of the `settings` table. Send it from the topic the bot should write to on its own (startup notices, task results) — that topic goes to `workspace_thread_id`; from the General topic it writes to General. Until then, those messages go to the owner's private chat. `/settings` shows the workspace and has a button that forgets it; unprompted messages then go to the private chat again.
+1. Create a supergroup. In its settings, turn **Topics** on.
+2. Add the bot as an **administrator** with permission to manage topics. An admin sees every message regardless of privacy mode.
+3. Create one normal topic per subject. The bot routes any topic it sees. A due reminder gets its own topic automatically.
+4. **Send `/setworkspace` in the group.** Owner only. It is the only way to record the workspace (`workspace_chat_id` in `settings`).
+
+Send `/setworkspace` from the topic the bot should write to on its own (startup notices, task results). That topic goes to `workspace_thread_id`. From General, the bot writes to General. Until then, those messages go to the owner's private chat. `/settings` shows the workspace and has a button that forgets it. Unprompted messages then go to the private chat again.
 
 Check it landed:
 
@@ -42,7 +120,7 @@ Check it landed:
 sqlite3 .data/bot.db "select key, value from settings"
 ```
 
-To pin it by hand instead (the chat id of a supergroup is negative, e.g. `-1001234567890`):
+To pin it by hand instead (a supergroup chat id is negative, e.g. `-1001234567890`):
 
 ```bash
 sqlite3 .data/bot.db \
@@ -50,4 +128,4 @@ sqlite3 .data/bot.db \
    on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at"
 ```
 
-The workspace forum keeps the owner's filesystem and session capabilities, but receives no account apps, plugins or inherited MCP servers. Every other group is treated as a lightweight group (see below). The General topic and a private chat each stay a single conversation.
+The workspace forum keeps the owner's filesystem and session capabilities, but gets no account apps, plugins or inherited MCP servers. Every other group is a lightweight group (see above). The General topic and a private chat each stay one conversation.

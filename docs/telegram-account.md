@@ -1,40 +1,257 @@
 # Telegram account
 
-The bot can also act as the owner's own Telegram account, through MTProto: read the history of any chat the owner is in, read public channels, search one chat or all of them, see which messages form one album, download media, and act as you: send, reply, forward, edit or delete messages, send files and albums, react, pin, archive or mute a chat, manage scheduled messages, post polls and vote. It can also leave a draft for you to send yourself, and read your contacts, folders, forum topics, group members, scheduled messages, reactions, unread mentions and read receipts. The owner and executors get these tools: in their private chat with the bot, and in scheduled tasks one of them set up. Grant `executor` only to people you trust to act as your account. Members, guests, groups, the workspace forum and Business replies never get them.
+The bot can act as the owner's own Telegram account through MTProto. It can:
 
-A task keeps the id of the person who last set what it does or where it reports. Each time it fires, the bot checks that this person still has the tier the task was stamped with. Revoke an executor or make them a member, and their tasks run without the account from the next fire. A task an executor wrote runs with the executor's rights, not the owner's admin helpers. A task written before this check holds the account only if the owner wrote it; a task written from a run without the account never holds it. This check stops honest runs only: an executor's run has the whole machine and can forge the stamp, so grant `executor` only to people you trust.
+- Read any chat you are in and public channels. Search one chat or all, find albums, download media.
+- Send, reply, forward, edit, delete, send files and albums, react, pin, archive, mute, manage scheduled messages, post polls and vote.
+- Leave a draft for you to send.
+- Read your contacts, folders, forum topics, group members, scheduled messages, reactions, unread mentions and read receipts.
 
-1. Open [my.telegram.org](https://my.telegram.org) → API development tools, create an app, and put its id and hash in `.env` as `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`. Restart the bot.
-2. Send `/login` to the bot and press «Sign in: Telegram account». It sends a QR code. On your phone open Settings → Devices → Link Desktop Device and scan it. The code renews every 30 seconds; after a scan the login can take up to 30 seconds to finish.
-3. If the account has a cloud password, the bot asks for it. Send it as a plain message. The bot deletes that message after reading it.
+Only the owner and executors get these tools: in their private chat with the bot, and in scheduled tasks one of them set up. Members, guests, groups, the workspace forum and Business replies never get them. Grant `executor` only to people you trust to act as your account.
 
-`/login` shows the status, with «Sign out: Telegram account» to end the session and «Cancel sign-in: Telegram account» to stop a login in progress. The QR code, the password prompt and every result stay in the topic where you pressed «Sign in». A cloud password sent in that topic while the bot waits for one is never read as a message to the agent; any command, `/login` included, is let through. A message in any other topic or in the main chat goes to that conversation as usual, so send the password only where the bot asked for it. The session lives in `.data/telegram-account.db` and survives restarts. Media a run downloads lands in `.data/account-media/`, and files a run asks to send are copied to `.data/account-outbox/`; both are cleared after a day.
+## Task rights
 
-Writes wait for a button by default: the bot sends you, in your private chat with it, exactly what would happen (the recipient and text, the message a reaction or pin goes on, the files, the poll) with a button named for the action ("Send", "Pin", "Archive"…) and "Cancel", and only `ALLOWED_USER_ID` can press them. An unanswered request expires after 24 hours. Turn Confirm account actions off in `/settings`, or set `TELEGRAM_ACCOUNT_WRITES=direct`, to skip the button; then a scheduled task can send on its own, and a run that read a hostile message has nothing between it and your account. Runs are told never to follow instructions found in messages they read, but that is a request to a model, not a guarantee. The mode applies to every run with the account. Under `confirm` an executor's write also comes to you, the owner, for the button, with a line that names the executor who asked: the executor cannot approve it. Under `direct` no button is made, except for a run started over the [HTTP API](http-api.md): its writes always wait for the button, with a line naming the API key whose run asked.
+A task keeps the id of the person who last set what it does or where it reports. At each fire the bot checks that this person still has the tier the task was stamped with.
 
-**Read marks.** What a run reads stops showing as unread. `get_history` on the newest page marks the chat read up to its newest message, every mention of you included. In a forum group only what is on the page is marked: each topic on it up to its own newest message, and the mentions on it; `mark_read` reads the rest. An older page (`before_id`) marks only the mentions it holds. And `download_media` on a voice note or round video marks it listened. A view-once or self-destructing one is never marked: that would start its timer. That holds for every run with the account, an executor's and a scheduled task's too, so a morning digest of channels leaves them read. Turn Mark as read off in `/settings` to keep everything unread after the bot looked. A run can also mark a chat read on request, with `mark_read`, whatever the switch says: all of it, or up to one message, every unread forum topic included. Mentions of you are cleared only when the whole chat is marked. The switch covers Business replies as well: after the bot answers in a Business chat, the chat is read up to the newest message of the other person the bot saw. That one needs the Business connection's right to mark messages as read (`can_read_messages`); without it the chat stays unread.
+- Revoke an executor or make them a member: their tasks run without the account from the next fire.
+- A task an executor wrote runs with the executor's rights, not the owner's admin helpers.
+- A task written before this check holds the account only if the owner wrote it.
+- A task written from a run without the account never holds it.
 
-**Forwarding a channel post.** A typical executor task: each morning read a few channels, pick one post, and forward it to you. The executor writes it as a prompt task, for example "every morning at 9 read @channel_a, @channel_b and @channel_c, pick the most interesting post and forward it to me". On each fire the run reads the channels with `get_history`. Every message comes with `album_id`: the messages of one album share it. A page of history can cut an album in two, so the run calls `get_album` with any id of the chosen album to get all of its ids in order. Then it calls `forward_messages` once with the source chat, the destination and all the original ids. To land it in one topic of a forum group, it also passes `to_thread_id`: the `topic_id` that `get_history` shows on a message of that topic, and the confirmation names the topic. You get a native Telegram forward: the original media, caption and album, with the source shown. Nothing is downloaded or uploaded again. Under `direct` the forward happens at once; under `confirm` the button waits for you in the bot chat. A channel or message with content protection (`content_protected: true`) cannot be forwarded: the tool refuses before any button, and the run is told to report that, not to rebuild the post from downloaded files.
+The check stops honest runs only. An executor's run has the whole machine and can forge the stamp.
 
-**Tools.** Reads, which run at once: `list_dialogs`, `get_chat`, `get_history`, `get_album`, `get_messages`, `search_messages`, `download_media`, `list_drafts`, `list_topics`, `list_contacts`, `get_common_chats`, `list_members`, `list_scheduled`, `get_reactions`, `unread_mentions`, `read_date`, `transcribe_voice`, `translate` and `list_folders`. Changes only you see, which also run at once: `mark_read`, `mark_unread` and `save_draft`. Writes, which follow the Confirm account actions mode: `send_message`, `send_media`, `forward_messages`, `edit_message`, `delete_messages`, `react`, `pin`, `unpin`, `archive`, `mute`, `delete_scheduled`, `send_scheduled_now`, `create_poll` and `vote`. Each checks its target first (the message, the scheduled message, the poll, the file), so you are never asked to approve something Telegram would refuse. Never available: deleting a whole chat history, removing or banning members, handing over ownership, editing your profile and importing contacts.
+## Setup
 
-**Drafts.** Ask "draft a reply to Kirill, do not send it" and the run calls `save_draft`: the text appears in the input field of that chat (or forum topic) on all your devices, and nothing is sent, so there is no button. It replaces a draft that was already there, and the run is told what it replaced. `list_drafts` lists every draft you have; `send_message` with `clear_draft` clears the draft of that chat once it sends.
+1. Open [my.telegram.org](https://my.telegram.org) → API development tools. Create an app. Put its id and hash in `.env` as `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`. Restart the bot.
+2. Send `/login` and press «Sign in: Telegram account». The bot sends a QR code. On your phone open Settings → Devices → Link Desktop Device and scan it. The code renews every 30 seconds. After a scan, login can take up to 30 seconds.
+3. If the account has a cloud password, the bot asks for it. Send it as a plain message. The bot deletes it after reading.
 
-**Paging, filters and links.** `get_history` pages back with `before_id`, starts before a date with `to` and stops at a date with `from`; with `after_id` it reads forward, oldest first. `search_messages` narrows by `filter` (photo, video, document, url, voice, mention, pinned, poll…), by `from_user` and by `thread_id` (a forum topic, or the comments of a channel post), and pages with `cursor`. `list_dialogs` pages with `offset`. Every message carries its t.me `link` (supergroups and channels only), its `reactions` and, for a file, its name, size and type; a dialog carries your unsent `draft`. `get_messages` opens a t.me link, fetches messages by id, follows a reply chain up, or opens the comments of a channel post. `list_topics` gives the ids of a forum's topics, so a run never guesses one. `list_members` lists the most recent members, or searches everyone by name or @username with `query`; `query` does not combine with the recent, bots or admins lists, and a basic (non-super) group has only the all, recent, admins and bots lists.
+`/login` shows the status. «Sign out: Telegram account» ends the session. «Cancel sign-in: Telegram account» stops a login in progress.
 
-**Sending options.** `send_message` can go into a forum topic (`thread_id`), without a sound (`silent`) or later (`schedule`, a date with its time zone, between 10 seconds and a year ahead); the confirmation says so, and gives a scheduled time in your home zone. `edit_message` works on your own messages only (your notes in Saved Messages count; a forward saved there does not) and on their text or caption only: a caption keeps to 1024 characters, and a sticker, poll or other media with no caption gets no button, and the confirmation shows the old text and the new, the old one cut short when both would not fit one message. A scheduled send you approve after its time has passed is not sent: the confirmation says the time has passed. A timed mute you approve after its end is not applied either, and the chat's notifications are left as they are. A `delete_scheduled` you approve after one of its messages already went out deletes nothing, and the confirmation says so. A confirmation that would be too long for one Telegram message is never shown; the run is told to shorten the text. `delete_messages` checks every id exists, deletes for everyone unless the run passes `revoke: false` (refused in a supergroup or channel, where Telegram always deletes for everyone), and the confirmation names the messages someone else wrote.
+The QR code, password prompt and results stay in the topic where you pressed «Sign in». Send the password only there. A password sent there while the bot waits is never read as a message to the agent, and any command, `/login` included, still works. A message in any other topic or in the main chat goes to that conversation as usual.
 
-**Files.** `send_media` sends one photo, video, document, voice note or audio file, or an album of up to ten. A path must be a file the run made or you sent the bot: under the working directory (or `PROJECTS_DIR`) or the system temp dir. The bot's own files are refused: `.data` (and with it downloaded account media), the repo's dotfiles, the provider CLIs' logins, and names like `.env*`, `credentials*`, `secrets*`, `*.pem`, `*.key` — the same list `send-file-to-user` applies. A file is at most 50 MB, a photo at most 10 MB. How it goes out follows the extension unless the run says (`as`); a voice note goes alone, and an album holds photos and videos, or only documents, or only audio. When the run asks, each file is copied into `.data/account-outbox/`, and that copy is what you see and what is sent, so a file changed afterwards never goes out. Under `confirm` the bot first sends you the files themselves, silently, exactly as they would go out, and the confirmation answers them; if that preview cannot be sent, nothing is asked and nothing is sent. The copy is removed once the write is done, failed, cancelled or expired.
+| Path | Holds |
+| --- | --- |
+| `.data/telegram-account.db` | The session. Survives restarts. |
+| `.data/account-media/` | Media a run downloads. Cleared after a day. |
+| `.data/account-outbox/` | Copies of files a run sends. Cleared after a day. |
 
-**Reactions, pins, chats, polls.** `react` puts your reaction on a message (or takes it off without `emoji`; a custom emoji is `custom:<id>`). `pin` pins silently unless the run passes `notify`; `unpin` unpins. `archive` moves a chat to the archive or out of it, and a chat already there gets no button. `mute` silences a chat until a time or for good, or turns it back on; only the mute changes, the chat's sound, previews and story settings stay as they were. `delete_scheduled` and `send_scheduled_now` act on ids from `list_scheduled`. `create_poll` posts a poll (anonymous and single-answer unless `public` or `multiple`), with the same reply, topic, sound and schedule options as `send_message`; `vote` votes by answer index, as every message with a poll lists them, or retracts with `options: []`; the vote goes to the answers the confirmation named, so if the poll's answers changed before you press, Telegram refuses it instead of counting another answer, and a poll that forbids changing a vote gets no button for a second one. The confirmation of a reaction, pin, unpin and scheduled-message action quotes the message it acts on.
+## Confirming writes
 
-**Raw Telegram API.** For anything the tools above do not do, a run can reach the rest of the Telegram API directly, through three more tools on the same server. `tg_search_methods` searches the API schema that ships with the bot (layer 229 with mtcute 0.32.2) by words in a method's name or description, optionally in one namespace, and lists each hit with its signature and its class. `tg_describe` explains a method, a type or a constructor: the arguments with their types and which are optional, what it returns, and the errors it can fail with. `tg_call` calls one method. A peer argument takes `"me"`, a chat id as the other tools give it or a @username, and is refused as an object such as `inputPeerUser` (only `inputPeerSelf` and the empty constructors pass), so the confirmation can name every chat; a basic group's bare `chat_id` (`messages.editChatTitle`, `addChatUser` and the like), the user ids of `contacts.editCloseFriends` and the chats of a privacy rule are looked up and named too; a raw answer adds `marked_id` next to every peer, chat and channel it holds, because Telegram's own `channelId` and `chatId` are bare numbers that would read as a person's id; a 64-bit number is a decimal string and bytes are base64. Every call is checked against the schema first, so an unknown argument or a wrong type is refused before anything reaches Telegram. Every method falls into one of four classes, decided by one classifier (`apps/telegram/src/account/raw-policy.ts`):
+By default every write waits for a button. The bot sends you, in your private chat, exactly what would happen: recipient and text, the message a reaction or pin goes on, the files, the poll. Buttons are named for the action ("Send", "Pin", "Archive"…) plus "Cancel". Only `ALLOWED_USER_ID` can press them. A request expires after 24 hours.
 
-- **read** (`get…`, `search…`, `check…`, `resolve…`): runs at once. The answer comes back as `{method, class, untrusted_content: true, result}`, with access hashes and file references removed, long texts and lists cut, and the whole answer within 48 KB.
-- **mark** (only the methods that move a read mark: `messages.readHistory`, `channels.readHistory`, `readDiscussion`, `readMentions`, `readReactions`, `readSavedHistory`, `readFeaturedStickers`, `readPollVotes`): runs at once, like `mark_read`. `readMessageContents` (both namespaces) and `readEncryptedHistory` are writes, behind your button: they mark a voice or round note played for its sender and start the countdown of a view-once, timed or secret-chat message.
-- **write** (everything else): **always** waits for your button, even with Confirm account actions off or `TELEGRAM_ACCOUNT_WRITES=direct`, because the class is a guess from the method's name. The confirmation starts with a warning that this is a direct API call, names the method and what it does, then lists every argument, chats by their name and bytes by their size (short ones, such as a report reason, by their text, or in hex), with nothing cut; a call too long to show in one message (over 3500 characters) is refused. A reaction, joining or leaving a channel, joining by invite link and blocking or unblocking someone read as one plain sentence instead. A chat named by @username is resolved when the run asks and kept by its id, so the write reaches the chat you saw even if the username changes hands. A raw send with a `scheduleDate` you approve after that time has passed is not sent, as with `send_message`.
-- **deny**: refused, whatever the mode. That covers logins and sessions (`auth.*`, and the account's password, passkey, authorization, takeout, email, phone, passport and push-device methods), deleting the account or changing its self-destruct timer, payments, calls, file upload and download, SMS jobs, Fragment, deleting a channel or a group and handing over ownership, web apps and URL logins, pressing a bot's inline button, voting (`messages.sendVote`: use `vote`, whose confirmation names the answers), the methods that look like reads but act, whose result could not come back from behind a button (counting a view, `messages.getMessagesViews` and `account.resolveBusinessChatLink`; asking an inline bot, `messages.getInlineBotResults`; the people-nearby list, which can publish your location, `contacts.getLocated`), any read that can spend your Stars or record a bot's referral (an `allow_paid_stars` or `referer` argument: `channels.searchPosts`, `contacts.resolveUsername`, `help.getRecentMeUrls`), bot-only methods, and the wrapper methods (`invokeWithLayer`, `invokeAfterMsg`…) that would carry another call past the check. A namespace a future API layer adds is denied until someone reviews it.
+To skip the button, turn Confirm account actions off in `/settings` or set `TELEGRAM_ACCOUNT_WRITES=direct`. This applies to every run with the account. Then:
 
-At layer 229 the classifier puts the 783 methods a user account may call at 236 read, 8 mark, 309 write and 230 deny. One `tg_call` holds at most 200 items in any list and at most 50 chats given as `"me"`, an id or a @username, because each @username is a lookup on your account and thousands at once would earn it a long flood wait. Prefer the typed tools whenever one fits: they check more (that a message exists, that a file is allowed) and their confirmations say more.
+- A scheduled task can send on its own.
+- A run that read a hostile message has nothing between it and your account. Runs are told to ignore instructions in messages they read, but that is a request to a model, not a guarantee.
 
-**Output size.** One tool answer is at most 48 KB. A longer list is cut at the end and says `truncated: true`, and its next-page cursor continues from the last item kept.
+| Case | Behaviour |
+| --- | --- |
+| `confirm`, executor's write | The button goes to you, with a line naming the executor. The executor cannot approve it. |
+| `direct` | No button. |
+| Run started over the [HTTP API](http-api.md) | Always waits for the button, with a line naming the API key. |
+
+## Read marks
+
+What a run reads stops showing as unread.
+
+- `get_history` on the newest page marks the chat read to its newest message, every mention of you included.
+- In a forum group only the page is marked: each topic on it up to its newest message, and its mentions. `mark_read` reads the rest.
+- An older page (`before_id`) marks only the mentions it holds.
+- `download_media` on a voice note or round video marks it listened. A view-once or self-destructing one is never marked, since that starts its timer.
+
+This holds for every run, scheduled tasks too. A morning digest leaves the channels read. Turn Mark as read off in `/settings` to keep everything unread.
+
+`mark_read` works whatever the switch says. It marks a whole chat or up to one message, every unread forum topic included. Mentions clear only when the whole chat is marked.
+
+The switch covers Business replies too. After the bot answers in a Business chat, the chat is read to the newest message of the other person that the bot saw. This needs the Business connection's `can_read_messages` right. Without it the chat stays unread.
+
+## Forwarding a channel post
+
+Typical executor task: each morning read a few channels, pick one post, forward it to you. Example prompt: "every morning at 9 read @channel_a, @channel_b and @channel_c, pick the most interesting post and forward it to me". On each fire the run:
+
+1. Reads the channels with `get_history`. Messages of one album share an `album_id`.
+2. Calls `get_album` with any id of the chosen album to get all ids in order. A history page can cut an album in two.
+3. Calls `forward_messages` once with the source chat, destination and all ids.
+
+For one topic of a forum group, it also passes `to_thread_id`: the `topic_id` that `get_history` shows on a message of that topic. The confirmation names the topic.
+
+You get a native forward: original media, caption and album, with the source shown. Nothing is downloaded or uploaded again. Under `direct` it happens at once. Under `confirm` the button waits in the bot chat.
+
+A channel or message with `content_protected: true` cannot be forwarded. The tool refuses before any button, and the run reports that instead of rebuilding the post.
+
+## Tools
+
+| Kind | Tools |
+| --- | --- |
+| Reads, run at once | `list_dialogs`, `get_chat`, `get_history`, `get_album`, `get_messages`, `search_messages`, `download_media`, `list_drafts`, `list_topics`, `list_contacts`, `get_common_chats`, `list_members`, `list_scheduled`, `get_reactions`, `unread_mentions`, `read_date`, `transcribe_voice`, `translate`, `list_folders` |
+| Changes only you see, run at once | `mark_read`, `mark_unread`, `save_draft` |
+| Writes, follow Confirm account actions | `send_message`, `send_media`, `forward_messages`, `edit_message`, `delete_messages`, `react`, `pin`, `unpin`, `archive`, `mute`, `delete_scheduled`, `send_scheduled_now`, `create_poll`, `vote` |
+
+Each write checks its target first (message, scheduled message, poll, file). You are never asked to approve what Telegram would refuse.
+
+Never available: deleting a whole chat history, removing or banning members, handing over ownership, editing your profile, importing contacts.
+
+### Drafts
+
+Ask "draft a reply to Kirill, do not send it". `save_draft` puts the text in that chat's (or forum topic's) input field on all your devices. Nothing is sent, so there is no button. It replaces an existing draft, and the run is told what it replaced.
+
+`list_drafts` lists your drafts. `send_message` with `clear_draft` clears that chat's draft once sent.
+
+### Paging, filters and links
+
+| Tool | Option | Does |
+| --- | --- | --- |
+| `get_history` | `before_id` | Pages back. |
+| `get_history` | `to` / `from` | Starts before / stops at a date. |
+| `get_history` | `after_id` | Reads forward, oldest first. |
+| `search_messages` | `filter` | photo, video, document, url, voice, mention, pinned, poll… |
+| `search_messages` | `from_user`, `thread_id` | By sender; by forum topic or channel-post comments. |
+| `search_messages` | `cursor` | Pages. |
+| `list_dialogs` | `offset` | Pages. |
+| `list_members` | `query` | Searches all members by name or @username. Without it, lists the most recent. |
+
+- Every message carries its t.me `link` (supergroups and channels only), `reactions` and, for a file, name, size and type. A dialog carries your unsent `draft`.
+- `get_messages` opens a t.me link, fetches by id, follows a reply chain up, or opens a channel post's comments.
+- `list_topics` gives a forum's topic ids, so a run never guesses one.
+- `query` does not combine with the recent, bots or admins lists. A basic group has only the all, recent, admins and bots lists.
+
+### Sending options
+
+| `send_message` option | Does |
+| --- | --- |
+| `thread_id` | Sends into a forum topic. |
+| `silent` | No sound. |
+| `schedule` | Sends later: a date with time zone, 10 seconds to a year ahead. The confirmation shows the time in your home zone. |
+
+The confirmation states each option used.
+
+`edit_message`:
+
+- Your own messages only. Notes in Saved Messages count. A forward saved there does not.
+- Text or caption only. A caption is at most 1024 characters.
+- A sticker, poll or other media with no caption gets no button.
+- The confirmation shows old and new text. The old one is cut short when both do not fit.
+
+`delete_messages` checks every id exists and deletes for everyone unless the run passes `revoke: false`. That is refused in a supergroup or channel, where Telegram always deletes for everyone. The confirmation names messages someone else wrote.
+
+Approving late:
+
+- A scheduled send approved after its time is not sent.
+- A timed mute approved after its end is not applied. The chat's notifications stay as they are.
+- A `delete_scheduled` approved after a message already went out deletes nothing.
+
+The confirmation says so in each case. A confirmation too long for one Telegram message is never shown, and the run is told to shorten the text.
+
+### Files
+
+`send_media` sends one photo, video, document, voice note or audio file, or an album of up to ten.
+
+| Rule | Value |
+| --- | --- |
+| Allowed path | A file the run made or you sent the bot: under the working directory (or `PROJECTS_DIR`) or the system temp dir. |
+| Refused | `.data` (so downloaded media too), the repo's dotfiles, the provider CLIs' logins, and `.env*`, `credentials*`, `secrets*`, `*.pem`, `*.key`. Same list as `send-file-to-user`. |
+| File size | At most 50 MB. |
+| Photo size | At most 10 MB. |
+| Album | Photos and videos, or only documents, or only audio. |
+| Voice note | Goes alone. |
+
+The extension decides how a file goes out, unless the run passes `as`.
+
+Each file is copied to `.data/account-outbox/`. The copy is what you see and what is sent, so a later change never goes out. It is removed when the write is done, failed, cancelled or expired.
+
+Under `confirm`, the bot first sends you the files, silently, exactly as they would go out. If that preview fails, nothing is asked and nothing is sent.
+
+### Reactions, pins, chats, polls
+
+| Tool | Does |
+| --- | --- |
+| `react` | Puts your reaction on a message. Without `emoji`, removes it. Custom emoji: `custom:<id>`. |
+| `pin` / `unpin` | Pins silently unless the run passes `notify`. / Unpins. |
+| `archive` | Moves a chat in or out of the archive. A chat already there gets no button. |
+| `mute` | Silences a chat until a time or for good, or turns it back on. Sound, previews and story settings stay. |
+| `delete_scheduled`, `send_scheduled_now` | Act on ids from `list_scheduled`. |
+| `create_poll` | Anonymous and single-answer unless `public` or `multiple`. Same reply, topic, sound and schedule options as `send_message`. |
+| `vote` | Votes by answer index, as the poll message lists them. `options: []` retracts. |
+
+- Confirmations of a reaction, pin, unpin and scheduled-message action quote the message they act on.
+- A vote goes to the answers the confirmation named. If the answers changed before you press, Telegram refuses it.
+- A poll that forbids changing a vote gets no button for a second one.
+
+## Raw Telegram API
+
+For anything the tools above do not do, a run has three more tools on the same server.
+
+| Tool | Does |
+| --- | --- |
+| `tg_search_methods` | Searches the bundled API schema (layer 229, mtcute 0.32.2) by words in a method's name or description, optionally in one namespace. Shows signature and class. |
+| `tg_describe` | Explains a method, type or constructor: arguments with types and which are optional, return value, possible errors. |
+| `tg_call` | Calls one method. |
+
+Rules for `tg_call`:
+
+- A peer takes `"me"`, a chat id as the other tools give it, or a @username. An object such as `inputPeerUser` is refused (only `inputPeerSelf` and empty constructors pass), so the confirmation can name every chat.
+- A basic group's bare `chat_id` (`messages.editChatTitle`, `addChatUser`…), the user ids of `contacts.editCloseFriends` and the chats of a privacy rule are looked up and named too.
+- A raw answer adds `marked_id` next to every peer, chat and channel, since Telegram's bare `channelId` and `chatId` would read as a person's id.
+- A 64-bit number is a decimal string. Bytes are base64.
+- Every call is checked against the schema first. An unknown argument or wrong type is refused before it reaches Telegram.
+
+One classifier (`apps/telegram/src/account/raw-policy.ts`) puts each method in one of four classes. At layer 229 a user account may call 783 methods.
+
+| Class | Methods | Behaviour                     |
+| ----- | ------- | ----------------------------- |
+| read  | 236     | Runs at once.                 |
+| mark  | 8       | Runs at once.                 |
+| write | 309     | Always waits for your button. |
+| deny  | 230     | Refused.                      |
+
+### read
+
+`get…`, `search…`, `check…`, `resolve…`. The answer is `{method, class, untrusted_content: true, result}`. Access hashes and file references are removed, long texts and lists are cut, and the whole answer stays within 48 KB.
+
+### mark
+
+Only methods that move a read mark: `messages.readHistory`, `channels.readHistory`, `readDiscussion`, `readMentions`, `readReactions`, `readSavedHistory`, `readFeaturedStickers`, `readPollVotes`. Runs like `mark_read`.
+
+`readMessageContents` (both namespaces) and `readEncryptedHistory` are writes. They mark a voice or round note played for its sender and start the countdown of a view-once, timed or secret-chat message.
+
+### write
+
+Everything else. It **always** waits for your button, even with Confirm account actions off or `TELEGRAM_ACCOUNT_WRITES=direct`, because the class is a guess from the method's name. The confirmation:
+
+- Opens with a warning that this is a direct API call, then names the method and what it does.
+- Lists every argument, nothing cut. Chats show by name, bytes by size (short ones, such as a report reason, as text or hex).
+- Is refused if over 3500 characters.
+- Reads as one plain sentence for a reaction, joining or leaving a channel, joining by invite link, and blocking or unblocking someone.
+
+A chat named by @username is resolved when the run asks and kept by id, so the write reaches the chat you saw even if the username changes hands. A raw send with a `scheduleDate` approved after that time is not sent, as with `send_message`.
+
+### deny
+
+Refused in every mode.
+
+- Logins and sessions: `auth.*`, and the account's password, passkey, authorization, takeout, email, phone, passport and push-device methods.
+- Deleting the account or changing its self-destruct timer.
+- Payments, calls, file upload and download, SMS jobs, Fragment.
+- Deleting a channel or group, handing over ownership.
+- Web apps, URL logins, pressing a bot's inline button.
+- `messages.sendVote`: use `vote`, whose confirmation names the answers.
+- Reads that act, since their result could not come back from behind a button:
+  - Counting a view: `messages.getMessagesViews`, `account.resolveBusinessChatLink`.
+  - Asking an inline bot: `messages.getInlineBotResults`.
+  - The people-nearby list, which can publish your location: `contacts.getLocated`.
+- Reads that can spend your Stars or record a bot's referral (an `allow_paid_stars` or `referer` argument): `channels.searchPosts`, `contacts.resolveUsername`, `help.getRecentMeUrls`.
+- Bot-only methods.
+- Wrappers (`invokeWithLayer`, `invokeAfterMsg`…) that would carry another call past the check.
+
+A namespace a future API layer adds stays denied until reviewed.
+
+### Limits
+
+One `tg_call` holds at most 200 items in any list and at most 50 chats given as `"me"`, an id or a @username. Each @username is a lookup on your account, and thousands at once earn a long flood wait.
+
+Prefer the typed tools when one fits. They check more (message exists, file allowed) and their confirmations say more.
+
+## Output size
+
+One tool answer is at most 48 KB. A longer list is cut at the end and says `truncated: true`. Its next-page cursor continues from the last item kept.

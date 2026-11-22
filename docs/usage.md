@@ -2,15 +2,51 @@
 
 ## Everyday use
 
-Send text or a voice message. Voice is transcribed first and the transcript is quoted above the reply. With Voice transcripts off in `/settings` the transcript is not shown, in private chats and drafts alike; the voice note is still transcribed and run. The switch is the `voice_transcript` row of `settings` (`off`; no row or `on` shows it) and takes effect at once.
+Send text or a voice message. The bot transcribes voice and quotes the transcript above the reply.
 
-A Telegram client on a bad connection sometimes sends one message twice, and in a private chat with topics each copy opens a topic of its own. So in a private chat, a text or voice transcript of 40 characters or more that opens a new topic with the same words that opened another topic less than a minute before is not run again: the bot answers it with one line, and the first message goes on in its topic. Words sent into an existing topic always run, so a retry there goes through, and so do shorter words such as «yes». Groups and the workspace forum are not checked.
+With Voice transcripts off in `/settings`, the transcript is hidden (private chats and drafts). The voice note is still transcribed and run. The switch is the `voice_transcript` row of `settings` (`off`; no row or `on` shows it). It takes effect at once.
+
+### Duplicate messages
+
+A bad connection can make Telegram send one message twice. In a private chat with topics, each copy opens its own topic.
+
+The bot skips a copy when all of these hold:
+
+- the chat is private
+- the text or transcript is 40 characters or more
+- it opens a new topic with the same words that opened another topic less than a minute ago
+
+The bot answers with one line, and the first message goes on. Words sent into an existing topic always run. So do shorter words such as «yes». Groups and the workspace forum are not checked.
 
 ### Voice replies
 
-Ask for an answer by voice ("explain it in a voice message", «answer by voice») and the bot does the work as usual, then writes the answer for the ear (plain sentences, numbers as words, no formatting), speaks it with ElevenLabs and sends it as a voice message to the same chat and topic, with a line or two of text beside it. Only the owner's and executors' runs can, and only when asked. It needs `ELEVENLABS_API_KEY` ([configuration](configuration.md)) and `ffmpeg`; without the key the bot says voice is not set up and answers in text. A voice message is at most about fifteen minutes. The voice and the model are picked in `/settings` → Bot settings → Voice replies: the screen lists the ElevenLabs account's voices, its own (cloned or designed) first, so a voice added on elevenlabs.io shows up there; a voice saved from the library needs a paid ElevenLabs plan. Eleven v4 sounds best, v4 Turbo is faster, Flash v2.5 is cheaper.
+Ask for a voice answer ("explain it in a voice message", «answer by voice»). The bot does the work and writes the answer for the ear: plain sentences, numbers as words, no formatting. It speaks it with ElevenLabs and sends a voice message to the same chat and topic, with a line or two of text.
 
-The bot speaks English by default. The Language row of `/settings` switches it to Russian and back. It covers everything the bot itself says: replies, menus, buttons, notices, errors, reminder and task lists, and the command descriptions in Telegram's menu, which are re-registered for every user at once. It does not decide what language the agent answers in: for that, add a rule to `AGENTS.md` in the work directory, for example "Always answer in English". The switch is the `bot_language` row of `settings` (`ru`; no row or `en` is English) and takes effect without a restart. Two model texts follow it too: the Business answer the bot writes for the owner, Russian under Русский as before, English under English, and the name the bot gives a new private-chat topic from the first words sent in it: text, a voice transcript, a caption or a `/compose` batch (a file sent without words leaves the name for the next words). An unset call name follows it: «Ассистент» in Russian, «Assistant» in English. The bot's name in Telegram does not change with it; `profile-cli.ts set-persona` sets both. With no gender set, the bot speaks of itself in the masculine; `set-persona --gender female` switches it. Every run, a group's included, is told the bot's name, gender and owner, so the agent's own words agree with the bot's copy. Reply to a message to prepend it as context. Documents and photos are saved into `<work dir>/user-sent-files` (a sandboxed run's scratch directory, a group's own directory in a group) and the path is handed to the agent, which can send files back with `packages/agent/scripts/send-file-to-user.ts`.
+- Only owner and executor runs can, and only when asked.
+- Needs `ELEVENLABS_API_KEY` ([configuration](configuration.md)) and `ffmpeg`. Without the key, the bot says voice is not set up and answers in text.
+- A voice message is at most about 15 minutes.
+- Pick the voice and model in `/settings` → Bot settings → Voice replies. The screen lists the ElevenLabs account's voices, its own (cloned or designed) first, so a voice added on elevenlabs.io shows up there. A voice saved from the library needs a paid ElevenLabs plan.
+- Eleven v4 sounds best, v4 Turbo is faster, Flash v2.5 is cheaper.
+
+### Language and persona
+
+The bot speaks English by default. The Language row of `/settings` switches to Russian and back, without a restart (the `bot_language` row of `settings`: `ru`; no row or `en` is English).
+
+It covers everything the bot says: replies, menus, buttons, notices, errors, reminder and task lists. The command descriptions in Telegram's menu are re-registered for every user at once.
+
+Two model texts follow it too. The Business answer written for the owner is Russian under Русский and English under English. A new private-chat topic gets its name from the first words sent in it: text, a voice transcript, a caption or a `/compose` batch. A file sent without words leaves the name for the next words. An unset call name is «Ассистент» in Russian, «Assistant» in English.
+
+It does not set the language the agent answers in. For that, add a rule to `AGENTS.md` in the work directory, for example "Always answer in English".
+
+The bot's name in Telegram does not change with the language. `profile-cli.ts set-persona` sets both. With no gender set, the bot speaks of itself in the masculine. `set-persona --gender female` switches it. Every run, group runs included, is told the bot's name, gender and owner, so the agent's own words agree with the bot's copy.
+
+### Files and replies
+
+- Reply to a message to prepend it as context.
+- Documents and photos are saved into `<work dir>/user-sent-files` (a sandboxed run's scratch directory, or a group's own directory). The path goes to the agent.
+- The agent sends files back with `packages/agent/scripts/send-file-to-user.ts`.
+
+### Commands
 
 | Command | Does |
 | --- | --- |
@@ -32,44 +68,191 @@ The bot speaks English by default. The Language row of `/settings` switches it t
 | `/usage` | owner and executors, private chat only: how much of each subscription is used, per window, and when each window starts over |
 | `/apikeys` | owner and executors, private chat only: make, list and revoke keys for the [HTTP API](http-api.md) |
 
-`/history` lists the conversations of the owner and executors, newest first: when each was last used, the provider and model it ran on, the project when it is not the current one, and its title: the topic's name (🗂️) for a conversation in a topic, else the first thing asked. The list lives in the `session_history` table of `bot.db`. Every main run that keeps its session writes its row there, with its model and effort; light runs, scratch runs and task fires do not, except a fire of a task that runs in its chat's conversation (`session: route`, below), which is a turn of that conversation. A topic's name is kept when it is created, renamed, or named by the bot from the first message; a topic last renamed before this update shows its first message until it is renamed again. A topic's conversation from before history was recorded is listed too, as "(no topic)" until the topic is renamed or gets a new message. A Codex `/compact` continues the conversation in a fresh session: `/history` lists it once, under the new session, and an older button for the old one still resumes it. The Tasks button lists the fires of recurring tasks, newest first: when, the provider and model, and how each ended, the last 50 per task. It is a run log; a fresh fire keeps no session to resume, while a task that keeps a conversation shows the session it ran on. At the first boot on a build with this table, the bot imports the newest 200 Codex conversations its own main runs left in `$CODEX_HOME/sessions` (`~/.codex/sessions` by default): a rollout whose first prompt has the instructions only an owner or executor run gets. Group runs, helper turns, compaction seeds and other Codex clients are skipped, and so is a fire of a task that still exists. Fires of tasks deleted before the update can still show up. When that folder cannot be read yet (Codex not logged in, no permission), the import waits for the next boot. Claude's older conversations are not imported: its session list cannot tell the bot's runs from your own Claude Code sessions. Picking a conversation on another provider switches this conversation to it first, the way `/provider` does, and stops what is running here. Only the owner can switch; an executor is told whose the conversation was.
-
-`/context` shows how much of the conversation's context window is used: the provider and model, the share with a bar, the tokens against the window, and where the provider sums up on its own when it says. The numbers are the ones the provider's own CLI shows: for Claude what Claude Code's `/context` reports, measured against the window it compacts in (on some 1M models that is 200K, and the reply says so); for Codex what its status line reports, which leaves a fixed 12k of prompts and tools out of the percentage, so 50k of 258k reads 15%, not 19%. The figure is recorded at every request and settled at the end of each answer, so while the bot works it is the latest request's. It is measured only by a request: right after `/new` there is none yet; right after `/compact` Codex shows what the summary left, and Claude shows none until the next answer, because Claude Code's own count right after compacting still includes the conversation it summed up. The owner and executors get «Sum up» and «Start over», which do what `/compact` and `/new` do; members see their own conversation without buttons. A group, and a guest with no access granted, keeps no conversation between messages, so there is nothing to show.
-
-`/usage` works for the owner and executors, in a private chat only, because it shows the account. It lists every provider installed on the server. For each one that is logged in it shows the plan, the five-hour and weekly windows (and any window kept per model) with the share used, and the reset time in the home zone. Each provider's own CLI is asked, the way its own `/status` or `/usage` asks: `codex app-server` answers `account/read` and `account/rateLimits/read`, and Claude Code answers a usage request on a session that runs no turn. Neither spends tokens, and the CLI keeps refreshing its own login. The bot never reads `auth.json` or `.credentials.json`. A provider that is logged out says so: the logins are checked again first (at most once a minute per provider), so a logout after boot shows too. A read that fails or takes longer than 15 s says it could not tell. A login with no plan limits (an API key, or for Claude a long-lived token) says it shows none. When a limit is reached, the block ends with a line saying so. pi has no subscription windows: once it is ready its line says the bot does not show its limits.
-
 `/new` and `/stop` inside a topic affect that topic alone.
 
-**Which model answers.** Every conversation is decided once, on its first message (routed when the starter's default is Auto, the default for everyone who never changed it, unless the old `model_routing` switch is `off`, below), and keeps that choice until it ends — a `/new`, a new forum topic or a project switch starts a new conversation and a new routing. One TypeSafe Jev request asks seven questions about the message: how much has to be worked out, how many operations it unfolds into, what a wrong answer costs, and whether it is small talk, database work, writing a person will read as the owner's own, or a change to software. A policy table in `packages/agent/src/model-router.ts` turns those into a tier and an effort: Luna for chat and read-only lookups, Terra for everyday work, Sol past the second level of depth and for anything that touches the Ozma database or changes code, Astra for prose the owner will sign. By default each tier runs on the newest model the Codex account offers: Astra on `gpt-6.2-astra`, else `gpt-6-astra`; Sol on `gpt-6.2-sol`, else `gpt-6.1-sol`, else `gpt-6-sol`; Terra on `gpt-6.1-terra`, else `gpt-5.6-terra`; Luna on `gpt-6-luna`. A ChatGPT Go login offers only Terra and Luna. Without a key, or when the call fails or runs out of budget, it is Terra at medium effort; a judgment never fails a run. `/model` and `/effort` override the choice in that conversation alone, and their first entry hands it back to the defaults of whoever sends the next message there (below). Nothing about any of this reaches the chat — it goes to the ledger.
+### `/history`
 
-**What a new conversation starts on.** The owner and every executor each set their own in the New chats section of `/settings`: a provider, a model and an effort. A new forum topic and a conversation after `/new` start there; a conversation already running keeps what it runs on, and `/provider`, `/model` and `/effort` change only the conversation they are sent in.
+`/history` lists the owner's and executors' conversations, newest first. Each row shows when it was last used, the provider and model, the project (if not the current one) and a title. The title is the topic's name (🗂️) or the first thing asked. The list lives in the `session_history` table of `bot.db`.
+
+- Every main run that keeps its session gets a row. So does a fire of a `session: route` task.
+- Light runs, scratch runs and other task fires get none.
+- A topic's name is kept when it is created, renamed, or named by the bot. A topic last renamed before the bot recorded topic names shows its first message until it is renamed again.
+- A topic's conversation from before history was recorded shows as "(no topic)" until the topic is renamed or gets a new message.
+- A Codex `/compact` continues in a new session. `/history` lists it once, under the new session. An older button for the old one still resumes it.
+- Picking a conversation on another provider switches this conversation to it first, as `/provider` does, and stops what runs here. Only the owner can switch. An executor is told whose the conversation was.
+
+The Tasks button lists the last 50 fires per recurring task, newest first: when, provider and model, and how each ended. It is a run log. A fresh fire has no session to resume. A task that keeps a conversation shows the session it ran on.
+
+At first boot with this table, the bot imports the newest 200 Codex conversations its own main runs left in `$CODEX_HOME/sessions` (`~/.codex/sessions` by default). It takes a rollout whose first prompt has the instructions only an owner or executor run gets.
+
+- Group runs, helper turns, compaction seeds and other Codex clients are skipped. So is a fire of a task that still exists. Fires of tasks deleted before the update can still show up.
+- If that folder cannot be read yet (Codex not logged in, no permission), the import waits for the next boot.
+- Claude's older conversations are not imported. Its session list cannot tell the bot's runs from your own Claude Code sessions.
+
+### `/context`
+
+`/context` shows the provider and model, the share used with a bar, the tokens against the window, and where the provider sums up on its own. The numbers match the provider's own CLI.
+
+| Provider | Matches | Note |
+| --- | --- | --- |
+| Claude | Claude Code's `/context` | Measured against the window it compacts in. On some 1M models that is 200K, and the reply says so. |
+| Codex | its status line | Leaves a fixed 12k of prompts and tools out: 50k of 258k reads 15%, not 19%. |
+
+- The figure is recorded at every request and settled at the end of each answer. While the bot works, it is the latest request's.
+- Right after `/new` there is no figure. After `/compact`, Codex shows what the summary left. Claude shows none until the next answer, because Claude Code's own count still includes the conversation it summed up.
+- The owner and executors get «Sum up» and «Start over» (like `/compact` and `/new`). Members see their own conversation, without buttons.
+- A group, and a guest with no access granted, has no conversation to show.
+
+### `/usage`
+
+`/usage` is for the owner and executors, in a private chat only. It lists every provider installed on the server. For each one logged in, it shows the plan, the five-hour and weekly windows (and any per-model window) with the share used, and the reset time in the home zone.
+
+It asks each provider's own CLI, the way its own `/status` or `/usage` does. `codex app-server` answers `account/read` and `account/rateLimits/read`. Claude Code answers a usage request on a session that runs no turn. Neither spends tokens, and the CLI keeps refreshing its own login. The bot never reads `auth.json` or `.credentials.json`.
+
+| Case | The block says |
+| --- | --- |
+| Logged out | so. Logins are re-checked first (at most once a minute per provider), so a logout after boot shows too. |
+| Read fails or takes longer than 15 s | it could not tell |
+| Login with no plan limits (an API key, or for Claude a long-lived token) | it shows none |
+| A limit is reached | a closing line says so |
+| pi (no subscription windows), once ready | the bot does not show its limits |
+
+## Which model answers
+
+Each conversation is routed once, on its first message, and keeps that choice until it ends. A `/new`, a new forum topic or a project switch routes again.
+
+The router runs when the starter's default is Auto (the default for everyone who never changed it), unless the old `model_routing` switch is `off` (below).
+
+One TypeSafe Jev request asks seven questions about the message. Three are how much has to be worked out, how many operations it unfolds into, and what a wrong answer costs. The rest ask if it is small talk, database work, writing the owner will sign, or a change to software. A policy table in `packages/agent/src/model-router.ts` turns the answers into a tier and an effort.
+
+| Tier | Used for | Codex model, first found |
+| --- | --- | --- |
+| Luna | chat and read-only lookups | `gpt-6-luna` |
+| Terra | everyday work | `gpt-6.1-terra`, else `gpt-5.6-terra` |
+| Sol | past the second level of depth; anything that touches the Ozma database or changes code | `gpt-6.2-sol`, else `gpt-6.1-sol`, else `gpt-6-sol` |
+| Astra | prose the owner will sign | `gpt-6.2-astra`, else `gpt-6-astra` |
+
+- A ChatGPT Go login offers only Terra and Luna.
+- Without a key, or when the call fails or runs out of budget, the result is Terra at medium effort. A judgment never fails a run.
+- `/model` and `/effort` override the choice in that conversation alone. Their first entry hands it back to the defaults of whoever sends the next message there.
+- None of this reaches the chat. It goes to the ledger.
+
+### What a new conversation starts on
+
+The owner and every executor set their own in the New chats section of `/settings`: a provider, a model and an effort. A new forum topic and a conversation after `/new` start there. A running conversation keeps what it runs on. `/provider`, `/model` and `/effort` change only the conversation they are sent in.
 
 - **Model:** Auto (the router), the provider's default, or a tier: Astra, Sol, Terra or Luna. The menu names each tier by the provider's own model, for example Opus 5.5 for Sol on Claude.
 - **Effort:** Auto, the provider's default, or a level.
-- **Provider change:** both choices keep their meaning when the provider changes.
-- **Default provider down:** a new topic starts on the detected one (the owner's private topics on the private chat's provider), the menu shows the provider as unavailable, and `/new` says so and stays where it is.
+- **Provider change:** both choices keep their meaning.
+- **Default provider down:** a new topic starts on the detected one (the owner's private topics on the private chat's provider). The menu shows the provider as unavailable. `/new` says so and stays where it is.
 
-`/new` on another provider than the default switches the conversation the way `/provider` does: it stops what runs there and never resumes that provider's old conversation. That covers the owner's private chat and topics, and an executor's own private topics. An executor's private chat outside a topic shares its conversation with the owner's (one per project and provider), so it stays on the detected default and `/new` there says the choice works in their topics; a workspace topic belongs to everyone, so an executor's `/new` there moves nothing. When the owner's `/new` moves the private chat, the reply warns that executors' conversation on that provider starts over too, as `/provider` does. Choosing a new default provider moves nothing that runs: a conversation moves onto it at `/new`. The first row of the provider list, Auto, follows the detected default, in a new topic and on `/new` alike. Someone who never chose a provider sees «not chosen» and stays where they are on `/new`, as before. A model and effort default holds in a private chat outside a topic only for whoever starts its shared conversation. A new recurring task takes, at its first fire, the model and effort defaults of whoever wrote it, though its provider stays Codex while Codex can run; on another provider, only defaults that leave nothing to Auto apply. Someone who never pressed these rows starts as before. The old switch, the `model_routing` row of `settings` that the last row of `/model` used to flip, still decides for them: `off` gives the provider's default model at its default effort, and anything else gives the router. The first entry of `/model` and `/effort` reads «As in /settings» when the caller's own default is not Auto.
+### `/new` on another provider
 
-Only owner and executor runs are routed. Groups, guests, members and Business replies run on the cheap model at low effort, unless the owner chose otherwise in «Groups and guests» of `/settings`: a provider, a model tier and a depth for all of them, bot-wide. A chosen provider that cannot take a run (logged out, or unable to give a member a writable folder) leaves that run on the detected one. A recurring `prompt` task follows its own rules: see What a prompt task runs on, under Recurring tasks.
+`/new` on another provider than the default switches the conversation as `/provider` does. It stops what runs there and never resumes that provider's old conversation.
 
-A file sent with no caption is answered on a routed model, but does not decide the conversation's model: the words you send next do. A run that reads a sent document never routes below Terra (Sonnet on Claude), whatever its words; a model you chose yourself stays as you chose it. The bot reads a PDF's text when it saves the file and hands the run that text beside the file, so a run never depends on the PDF tools its machine happens to have; a scanned PDF has no text and goes on as the file alone.
+| Where | What `/new` does |
+| --- | --- |
+| Owner's private chat and topics; executor's own private topics | switches |
+| Executor's private chat outside a topic | shares one conversation with the owner's, so it stays on the detected default; `/new` says the choice works in their topics |
+| A workspace topic | belongs to everyone; an executor's `/new` moves nothing |
 
-A message sent while a task runs goes into that task, the way the ChatGPT and Claude apps take a message typed mid-answer, on Claude and on Codex alike: the agent reads it at its next tool call, or answers it right after when the model had already written its answer. A 👀 reaction on the message says the running task got it, or a short reply where reactions are off. If the task ends before the agent took the message in (an error, `/compact`, a `/provider` switch), it runs next, like a queued one, and loses its 👀; a message the agent already took is not run twice, and `/stop` and `/new` drop it. In groups, or with Messages mid-task off in `/settings`, it is queued and drained in order; the status message offers to force-send or clear the queue. A recurring task that fires into a busy conversation (`session: route`) never joins a running task this way: it waits until the conversation, and whatever was queued in it, is done.
+- When the owner's `/new` moves the private chat, the reply warns that executors' conversation on that provider starts over too, as `/provider` does.
+- Choosing a new default provider moves nothing that runs. A conversation moves at `/new`.
+- The first row of the provider list, Auto, follows the detected default, in a new topic and on `/new` alike.
+- Someone who never chose a provider sees «not chosen» and stays put on `/new`.
+- In a private chat outside a topic, a model and effort default holds only for whoever starts its shared conversation.
+- A new recurring task takes its writer's model and effort defaults at its first fire. Its provider stays Codex while Codex can run. On another provider, only defaults that leave nothing to Auto apply.
+- Someone who never pressed these rows starts as before. The old `model_routing` row of `settings` still decides for them (the last row of `/model` used to flip it). `off` gives the provider's default model at its default effort. Anything else gives the router.
+- The first entry of `/model` and `/effort` reads «As in /settings» when the caller's own default is not Auto.
 
-On Claude, the owner's and an executor's conversations can leave work running after they answer: a background command, a Monitor, a dynamic workflow, or a wake-up (`ScheduleWakeup`, at most an hour ahead) to check back later. The conversation then stays open: the answer is sent, typing stops, and when the work reports or the wake-up fires the agent continues in the same chat or topic. A message sent meanwhile goes straight in, even with Messages mid-task off, and so do messages queued while the agent was working. A waiting conversation leaves its `MAX_CONCURRENT_RUNS` slot for one of `MAX_BACKGROUND_RUNS`, and its later turns run there; when none is free it does not wait, and says so. It waits for a background command, Monitor or workflow as long as that runs (a workflow may take days; the CLI ends a Monitor or a command at its own deadline). Waiting on wake-ups alone, it stops after 70 minutes with nothing happening, and says so; a Monitor or wake-up the agent sets again each time keeps it going until `/stop`; `/stop`, `/new`, a `/history` resume or a new model or effort ends it at once. A restart of the bot does not end such a conversation. The restart stops it at once and says so in the chat. Once the bot is back, it continues: a workflow is relaunched from where it stopped (agents that had finished are not run again), a background command or Monitor is started again if the agent still needs it, and a conversation that waited on a wake-up alone continues when the wake-up was due. A conversation does not go on when its sender no longer has full access, Claude cannot run, or it was already resumed three restarts in a row with no message from the user between them. The startup notice counts those beside the ones that went on (or will, when their wake-up is due), and their chat is told too. One the user moved on from (`/new`, `/history`, `/provider`) is dropped quietly. A message the user sends there before it went on takes the pending work along with it, and `/stop` ends it for good. A `prompt` task's fire waits the same way (see Recurring tasks); a wake-up is still for the work at hand: use reminders or tasks for anything that must happen at a set time.
+### Groups, guests, members, Business
 
-Forwarded messages sent together go as one prompt. In a private chat or the workspace forum, each forward waits 1.5 s for the next one, and words typed meanwhile, or while the burst is still being read, join it as the request. The burst is charged as one run, then read one message at a time, in the order sent: every message headed with its sender and date, its photo or document saved where the conversation can open files, its voice note transcribed (and echoed, with Voice transcripts on), a place, contact or poll written out, a video, audio file or sticker named. A burst of nothing readable, such as stickers alone, is dropped. Words sent just before the forwards (Telegram sends a forward's comment first) still start or join a run of their own. Fifty forwards go out at once and the rest start the next burst. Groups take forwards one by one, as before.
+Only owner and executor runs are routed. Groups, guests, members and Business replies run on the cheap model at low effort.
 
-When the agent writes `.codex/plans/PLAN.md` the bot posts the plan with Execute (new session), Execute (keep context) and Modify plan.
+The owner can change this in «Groups and guests» of `/settings`: a provider, a model tier and a depth, bot-wide. If the chosen provider cannot take a run (logged out, or unable to give a member a writable folder), that run uses the detected one.
 
-**Quiet by default.** A run shows a typing indicator and then one message with the answer — tool calls and thinking never reach the chat, and there is no metadata footer. The dev view is the Detail row of `/settings`: «with steps» shows the steps, drafts and a footer with time and cost; «answer only» restores the default. Everything a user reads is in the bot's language; logs, the ledger and the CLIs stay English.
+A recurring `prompt` task follows its own rules: see What a prompt task runs on, under Recurring tasks.
 
-**Sub-agents and workflows.** When a run starts sub-agents (Claude's Agent tool, Codex's spawned agents) or a dynamic workflow, one status message shows them live, whatever the Detail row says: each agent with its state (⏳ queued · 🔄 running · ✅ done · ❌ failed · ⏹ stopped), its last tool and its time, then the totals (`3/7 done · 1 failed · 2m10s · 84k tokens`; stopped agents are counted apart) and a bar of how many ended. A workflow shows its name and its wave (`wave 2 of 3`), and an agent's label drops the start that repeats its wave's title (`research:hermes` reads `hermes` under Research); a finished wave folds into one line, and past three folded waves the oldest share one. Past ten agents the rest are counted. The message is edited in place about once every 1.5 s, and its «⏹ Stop» button is `/stop` for the run's own user while the message is live. Deleted by hand, it comes back with the next change. In a private chat and the workspace forum it is pinned without a sound while it runs, and unpinned when it ends; a chat where the bot cannot pin just keeps it unpinned. When everything in it has ended and the agent answered, it turns into a summary: each sub-agent with its time, each workflow wave with its agents (counted past four; past three waves the oldest share one line), failures with their error. A workflow a conversation waits on keeps its message live after the answer, until it ends. Groups and guests never see it.
+### Sent files
+
+- A file sent with no caption is answered on a routed model. It does not decide the conversation's model; the words you send next do.
+- A run that reads a sent document never routes below Terra (Sonnet on Claude). A model you chose yourself stays.
+- The bot reads a PDF's text when it saves the file and gives the run that text, so a run never depends on the PDF tools on its machine. A scanned PDF has no text and goes on as the file alone.
+
+## Messages while a task runs
+
+A message sent while a task runs goes into that task, on Claude and Codex. The agent reads it at its next tool call. If the model had already written its answer, it answers the message right after.
+
+- A 👀 reaction says the task got it. Where reactions are off, a short reply says it.
+- If the task ends first (an error, `/compact`, a `/provider` switch), the message runs next, like a queued one, and loses its 👀. A message the agent already took is not run twice.
+- `/stop` and `/new` drop a message the agent has not run.
+- In groups, or with Messages mid-task off in `/settings`, the message is queued and drained in order. The status message offers to force-send or clear the queue.
+- A recurring task that fires into a busy conversation (`session: route`) never joins a running task. It waits until the conversation, and its queue, are done.
+
+## Background work (Claude)
+
+On Claude, the owner's and an executor's conversations can leave work running after the answer: a background command, a Monitor, a dynamic workflow, or a wake-up (`ScheduleWakeup`, at most an hour ahead). The answer is sent and typing stops. When the work reports or the wake-up fires, the agent continues in the same chat or topic.
+
+- A message sent meanwhile goes straight in, even with Messages mid-task off. So do messages queued while the agent was working.
+- A waiting conversation moves from a `MAX_CONCURRENT_RUNS` slot to one of `MAX_BACKGROUND_RUNS`, and its later turns run there. With none free, it does not wait, and says so.
+- It waits as long as a command, Monitor or workflow runs. A workflow may take days. The CLI ends a Monitor or a command at its own deadline.
+- On wake-ups alone it stops after 70 minutes of nothing, and says so. A Monitor or wake-up the agent sets again each time keeps it going until `/stop`.
+- `/stop`, `/new`, a `/history` resume or a new model or effort ends it at once.
+
+A `prompt` task's fire waits the same way (see [Background work in a fire](#background-work-in-a-fire)). For anything that must happen at a set time, use reminders or tasks, not a wake-up.
+
+### After a restart
+
+A restart of the bot does not end such a conversation. It stops it at once and says so in the chat.
+
+When the bot is back, it continues. A workflow is relaunched from where it stopped, and finished agents do not rerun. A command or Monitor restarts if still needed. A wake-up waits until it was due.
+
+It does not continue if the sender lost full access, Claude cannot run, or it was already resumed three restarts in a row with no user message between. The startup notice counts those beside the ones that went on (or will, when their wake-up is due), and their chat is told.
+
+One the user moved on from (`/new`, `/history`, `/provider`) is dropped quietly. A message the user sends there before it went on takes the pending work along with it. `/stop` ends it for good.
+
+## Forwarded messages
+
+Forwarded messages sent together go as one prompt.
+
+- In a private chat or the workspace forum, each forward waits 1.5 s for the next one. Words typed meanwhile, or while the burst is still being read, join it as the request.
+- The burst is charged as one run and read one message at a time, in the order sent. Each message is headed with its sender and date.
+- Voice notes are transcribed (and echoed, with Voice transcripts on). Photos and documents are saved where the conversation can open files. Places, contacts and polls are written out. Videos, audio files and stickers are named.
+- A burst of nothing readable, such as stickers alone, is dropped.
+- Words sent just before the forwards still start or join a run of their own. Telegram sends a forward's comment first.
+- Fifty forwards go out at once. The rest start the next burst. Groups take forwards one by one.
+
+## Plans
+
+When the agent writes `.codex/plans/PLAN.md`, the bot posts the plan with Execute (new session), Execute (keep context) and Modify plan.
+
+## Quiet by default
+
+A run shows a typing indicator, then one message with the answer. Tool calls and thinking never reach the chat. There is no metadata footer.
+
+The dev view is the Detail row of `/settings`. «with steps» shows steps, drafts and a footer with time and cost. «answer only» restores the default.
+
+Everything a user reads is in the bot's language. Logs, the ledger and the CLIs stay English.
+
+## Sub-agents and workflows
+
+When a run starts sub-agents (Claude's Agent tool, Codex's spawned agents) or a dynamic workflow, one status message shows them live, whatever the Detail row says. Groups and guests never see it.
+
+It shows each agent with its state (⏳ queued · 🔄 running · ✅ done · ❌ failed · ⏹ stopped), last tool and time. It also shows the totals (`3/7 done · 1 failed · 2m10s · 84k tokens`; stopped agents are counted apart) and a bar of how many ended. Past ten agents, the rest are counted.
+
+A workflow shows its name and wave (`wave 2 of 3`). An agent's label drops the start that repeats its wave's title: `research:hermes` reads `hermes` under Research. A finished wave folds into one line. Past three folded waves, the oldest share one.
+
+- The message is edited in place about once every 1.5 s. Deleted by hand, it comes back with the next change.
+- «⏹ Stop» is `/stop` for the run's own user while the message is live.
+- In a private chat and the workspace forum, it is pinned without a sound while the run goes, and unpinned when it ends. A chat where the bot cannot pin keeps it unpinned.
+- When everything has ended and the agent answered, it becomes a summary: each sub-agent with its time, each wave with its agents, and failures with their error. A wave's agents are counted past four. Past three waves, the oldest share one line.
+- A workflow a conversation waits on keeps its message live after the answer, until it ends.
 
 ## Settings
 
-`/settings` opens a home screen: a short summary of what is in force, and a button per area. It opens only in a private chat, like `/login`, because it shows the owner's Telegram account and work chat. Every screen is the same message: a press edits its text and its buttons, and «<< Back» returns one level up. Each screen names every setting with its current value and says what it does; after a press the text shows the new value at once.
+`/settings` opens a home screen: a short summary of what is in force, and a button per area. It opens only in a private chat, like `/login`, because it shows the owner's Telegram account and work chat.
+
+Every screen is the same message: a press edits its text and buttons. «<< Back» returns one level up. Each screen names every setting with its current value and says what it does. After a press, the text shows the new value at once.
 
 | Screen | Who sees it | What it holds |
 | --- | --- | --- |
@@ -77,9 +260,13 @@ When the agent writes `.codex/plans/PLAN.md` the bot posts the plan with Execute
 | Bot settings | the owner | the switches, language, detail, daily limits, the Telegram account, the work chat, the time zone, tasks at once, and «Voice replies», «Groups and guests» and «Helpers» one level down |
 | Providers | the owner | Claude Code's and Codex's own settings, see [Provider settings](#provider-settings) |
 
-An executor sees only My settings; the owner's screens are not drawn for them, and a press that names one is refused. Members and guests cannot open `/settings`.
+An executor sees only My settings, and a press that names an owner screen is refused. Members and guests cannot open `/settings`.
 
-Every row takes effect at once, without a restart. A row the owner never pressed keeps the default in the table below, so a new row changes nothing until it is pressed. Messages mid-task and Mark as read are the exceptions: their default is the new behaviour. Turning Messages mid-task off brings back the queue; turning Mark as read off leaves chats unread after the bot looked at them. Each value of Bot settings is one row of the `settings` table.
+Every row takes effect at once, without a restart. A row the owner never pressed keeps the default below, so a new row changes nothing until it is pressed. Messages mid-task and Mark as read are the exceptions: their default is the new behaviour.
+
+Messages mid-task off brings back the queue. Mark as read off leaves chats unread after the bot looked at them.
+
+Each value of Bot settings is one row of the `settings` table.
 
 | Row | `settings` key | Values | Unset |
 | --- | --- | --- | --- |
@@ -99,7 +286,9 @@ Every row takes effect at once, without a restart. A row the owner never pressed
 | Voice replies → model | `tts_model` | `eleven_v4`, `eleven_v4_turbo`, `eleven_flash_v2_5` | `eleven_v4` |
 | Voice replies → voice | `tts_voice` | a voice id from the ElevenLabs account | the account's first voice matching the persona's gender, its own voices first |
 
-The New chats rows, on My settings, belong to whoever presses them: each is a row of the `user_settings` table, keyed by that person's Telegram id. A press opens a list in the same message, and «<< Back» returns to the screen.
+### New chats
+
+The New chats rows, on My settings, belong to whoever presses them. Each is a row of the `user_settings` table, keyed by that person's Telegram id. A press opens a list in the same message, and «<< Back» returns to the screen.
 
 | Row | `user_settings` key | Values | Unset |
 | --- | --- | --- | --- |
@@ -108,11 +297,13 @@ The New chats rows, on My settings, belong to whoever presses them: each is a ro
 | Model, on pi | `default_pi_model` | a pi `provider/id` from the list (favourites and recent `/model` picks), or `default` | pi's default |
 | Depth | `default_effort` | `auto`, `default`, `low`, `medium`, `high`, `xhigh` | `auto`, or `default` while `model_routing` is `off` |
 
-pi has no tiers, so on pi the Model list holds pi models by name instead: «pi's usual», then your favourites and the models you picked last with `/model`. A model that is not there is found with `/model <words>` in a conversation, and then shows up here among the recent ones. A stored model that is no longer on the list stays marked, with «not available now», since new conversations still start on it: pick another or «pi's usual».
+pi has no tiers. Its Model list holds pi models by name: «pi's usual», your favourites, and your last `/model` picks. Find another model with `/model <words>` in a conversation. It then shows up here among the recent ones. A stored model no longer on the list is marked «not available now», since new conversations still start on it: pick another or «pi's usual».
 
 The owner's private chat keeps its provider in the `owner_provider` row of `settings`, which `/provider` and `/new` write.
 
-The «Groups and guests» rows, a screen under Bot settings, are the owner's alone and bot-wide, each a row of `settings`; like New chats, a press opens a list in the same message.
+### Groups and guests
+
+«Groups and guests» is a screen under Bot settings. It is the owner's alone and bot-wide, each row a row of `settings`. As in New chats, a press opens a list in the same message.
 
 | Row | `settings` key | Values | Unset |
 | --- | --- | --- | --- |
@@ -121,17 +312,47 @@ The «Groups and guests» rows, a screen under Bot settings, are the owner's alo
 | Model, on pi | `light_pi_model` | a pi `provider/id` from the list (favourites and recent `/model` picks), or `default` | `PI_LIGHT_MODEL`, else pi's default |
 | Depth | `light_effort` | `default` (low), `low`, `medium`, `high`, `xhigh` | low |
 
-While «Helpers» leaves them on Auto, topic titles and the format pass of script tasks follow Who answers too, when that provider can run (ready, or its check gave no answer) and can do them; otherwise they stay on the detected helper (Codex first, then Claude, then pi). Model goes with them to whichever provider they land on, as for a light run; Depth does not, a helper pass keeps its own low effort. A note under the screen's hint points to «Helpers».
+While «Helpers» is on Auto, topic titles and the format pass of script tasks follow Who answers too. That needs the provider to run (ready, or its check gave no answer) and to do them. Otherwise they stay on the detected helper (Codex first, then Claude, then pi).
 
-A limit row counts runs per day. `off` removes the limit. The owner is never counted, and an executor is counted only in groups. The owner hears when a guest uses half of the per-person private limit and when they use all of it, at the value in force at that moment.
+Model goes with them to whichever provider they land on, as for a light run. Depth does not: a helper pass keeps its own low effort. A note under the screen's hint points to «Helpers».
 
-The account section shows whether the owner's Telegram account is connected. Connecting and logging out stay in `/login`. The switch row shows only when `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are set. The next write a run asks for uses the new value.
+### Limits
 
-A press on Time zone asks for a zone. The owner's next text message in that chat and topic is the answer: `Europe/Sofia`, any case, or a city that names one zone, such as `Sofia`. A zone the bot does not know gets an error and the value stays; press the row again to retry. A text that cannot be a zone, such as a sentence of more than three words, closes the question and goes to the agent as usual. A command, the Cancel button or ten minutes without an answer also stop the question. New reminders without a zone get this zone, also from `reminders-cli.ts`, and the reminder list shows it without a zone label. A reminder that exists keeps its zone.
+A limit row counts runs per day. `off` removes the limit. The owner is never counted. An executor is counted only in groups. The owner is told when a guest uses half of the per-person private limit, and when they use all of it, at the value in force at that moment.
+
+### Telegram account
+
+This section shows whether the owner's Telegram account is connected. Connecting and logging out stay in `/login`. The switch row shows only when `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are set. The next write a run asks for uses the new value.
+
+### Time zone
+
+A press on Time zone asks for a zone. The owner's next text message in that chat and topic is the answer: `Europe/Sofia`, any case, or a city that names one zone, such as `Sofia`.
+
+- An unknown zone gets an error and the value stays. Press the row again to retry.
+- A text that cannot be a zone (a sentence of more than three words) closes the question and goes to the agent as usual.
+- A command, the Cancel button or ten minutes without an answer also close the question.
+
+New reminders without a zone get this zone, also from `reminders-cli.ts`. The reminder list shows it without a zone label. A reminder that exists keeps its zone.
+
+### Tasks at once
+
+The value applies to the next run that starts. A run that finds no room fails with «I am busy right now». Nothing waits for a slot. Lowering the value stops no running run. New runs are refused until enough end.
+
+### Work chat
+
+This section shows the workspace set with `/setworkspace`, and a button that forgets it. A private chat with topics turned on already works as a workspace. A work chat is for work with other people.
 
 ### Helper passes
 
-«Helpers», a screen under Bot settings, is the owner's alone and bot-wide. It lists the three questions the bot asks itself, each with where it runs now (marked «Auto» when the owner chose nothing that can run): Address check (the address judge's fallback, used when `TYPESAFE_API_KEY` is unset or its call fails), Topic titles (topic titles) and Task formatting (the format pass of script tasks). Each opens a screen of its own rows, each a row of `settings`, where `<use>` is `judge`, `title` or `format`:
+«Helpers» is a screen under Bot settings, for the owner, bot-wide. It lists three questions the bot asks itself, each with where it runs now («Auto» when the owner chose nothing that can run).
+
+| Pass | `<use>` | What it is |
+| --- | --- | --- |
+| Address check | `judge` | the address judge's fallback, used when `TYPESAFE_API_KEY` is unset or its call fails |
+| Topic titles | `title` | topic titles |
+| Task formatting | `format` | the format pass of script tasks |
+
+Each pass has its own rows, each a row of `settings`.
 
 | Row | `settings` key | Values | Unset |
 | --- | --- | --- | --- |
@@ -140,16 +361,18 @@ A press on Time zone asks for a zone. The owner's next text message in that chat
 | Model, on pi | `helper_<use>_pi_model` | a pi `provider/id` from the list (favourites and recent `/model` picks), or `default` | `PI_LIGHT_MODEL`, else pi's default |
 | Depth | `helper_<use>_effort` | `default`, then the levels the provider offers on that model | see below |
 
-- On Auto, titles and formatting follow «Groups and guests», then the detected helper, as before; the address check goes to the first ready provider among Codex, Claude and pi (before, only Codex served it). On Auto the screen has the Who answers row alone.
-- Model and Depth apply only with a provider chosen here. Picking another provider, Auto included, sets both back to «Usual»; tapping the one already chosen keeps them.
-- When the chosen provider cannot run (not ready and its check gave an answer), or it is pi with no model a helper can run, the pass uses Auto, and the model and depth chosen here are dropped with it. For pi, its Who answers choice says why and the overview adds a note on the missing key.
-- Depth «Usual» is the provider's own for the address check (Codex's model default, Claude low, pi thinking off) and low for titles and formatting (pi thinking off). On pi a depth the model does not offer runs at the deepest level below it.
-- The address check gives up after 30 seconds and a title after 15, so a deeper setting there costs silence or Telegram's own topic name; the format pass has no limit, so a deeper setting delays a task's result.
-- With nothing chosen, a provider whose check gave no answer comes after every ready one, so a Codex check that timed out moves the address check to a ready Claude until the next check.
+- On Auto, titles and formatting follow «Groups and guests», then the detected helper. The address check goes to the first ready provider among Codex, Claude and pi. On Auto the screen has the Who answers row only.
+- Model and Depth apply only with a provider chosen here. Picking another provider, Auto included, resets both to «Usual». Tapping the one already chosen keeps them.
+- The pass uses Auto, and drops the model and depth chosen here, when the chosen provider cannot run (not ready, and its check gave an answer). The same holds for pi with no model a helper can run. For pi, its Who answers choice says why, and the overview adds a note on the missing key.
+- Depth «Usual» is the provider's own for the address check (Codex's model default, Claude low, pi thinking off). For titles and formatting it is low. On pi, a depth the model does not offer runs at the deepest level below it.
+- The address check gives up after 30 seconds and a title after 15. A deeper setting there costs silence or Telegram's own topic name. The format pass has no limit, so a deeper setting delays a task's result.
+- With nothing chosen, a provider whose check gave no answer comes after every ready one. So a Codex check that timed out moves the address check to a ready Claude until the next check.
 
 ### Provider settings
 
-Providers lists Claude and Codex (pi has no settings screen yet); each opens a screen with the version of the CLI runs start, every setting the bot lets the owner change, its value and what it does. A row opens a list: «Provider default» (forget the value) and every value the setting offers. The values apply to every run of that provider from the next answer on: the owner's, executors', groups' and guests', scheduled tasks and `/compact` too. The format, title and judge helper turns stay bare. Claude's Answer style and Git rules are part of a conversation's system prompt, which a running conversation keeps: they apply from `/new` or the next `/compact`.
+Providers lists Claude and Codex. pi has no settings screen yet. Each screen shows the version of the CLI that runs start, and every setting the owner can change, with its value and what it does.
+
+A row opens a list: «Provider default» (forget the value) and every value the setting offers. Values apply from the next answer on, to every run of that provider (the owner's, executors', groups' and guests', scheduled tasks and `/compact`). The format, title and judge helper turns stay bare. Claude's Answer style and Git rules are part of a conversation's system prompt, so a running conversation applies them from `/new` or the next `/compact`.
 
 | Provider | Row | Key | Values |
 | --- | --- | --- | --- |
@@ -164,34 +387,111 @@ Providers lists Claude and Codex (pi has no settings screen yet); each opens a s
 | Codex | Reasoning summary | `model_reasoning_summary` | `auto`, `concise`, `detailed`, `none` |
 | Codex | Answer length | `model_verbosity` | `low`, `medium`, `high` |
 
-Each provider's values are one JSON object in the `settings` table: `claude_settings`, `codex_settings` and `pi_settings` (which stays empty, since pi offers no setting yet). A key or value the list does not offer is dropped when it is read, so a row edited by hand never breaks a run. «Provider default» is Claude Code's built-in value, since runs read no settings file; for Codex it is the value in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default), and inside the sandbox view, which has no such file, Codex's built-in one.
+Values are stored as one JSON object per provider in the `settings` table: `claude_settings`, `codex_settings` and `pi_settings` (empty). A key or value the list does not offer is dropped on read, so a row edited by hand never breaks a run.
 
-What the bot depends on never changes, whatever the row says: Claude's `settingSources: []`, `strictMcpConfig`, the skills filter, the MCP servers, the deny list, workflows, hooks, connectors, bundled skills, remote control, artifacts, auto memory and transcript retention; Codex's sandbox and approval policy, web search, MCP servers, features, skills and shell environment; the model and effort of both, which come from My settings, `/model` and `/effort`. The owner's values are merged under these, never over. With `CLAUDE_BIN` set, runs start another Claude Code build than the one the list was typed against, and the Claude screen says so.
+«Provider default» is Claude Code's built-in value, since runs read no settings file. For Codex it is the value in `$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default). Inside the sandbox view, which has no such file, it is Codex's built-in value.
 
-Tasks at once applies to the next run that starts. A run that does not find room fails with «I am busy right now»; nothing waits in a line for a slot. Lowering the value stops no run that is running: new runs are refused until enough of them end.
+What the bot depends on never changes, whatever a row says. The owner's values are merged under these, never over.
 
-The work chat section shows the workspace set with `/setworkspace`, and a button that forgets it. The private chat with topics turned on already works as a workspace. A work chat is for work with other people.
+- Claude: `settingSources: []`, `strictMcpConfig`, the skills filter, the MCP servers, the deny list, workflows, hooks, connectors, bundled skills, remote control, artifacts, auto memory and transcript retention.
+- Codex: the sandbox and approval policy, web search, MCP servers, features, skills and shell environment.
+- Both: the model and effort, which come from My settings, `/model` and `/effort`.
+
+With `CLAUDE_BIN` set, runs start another Claude Code build than the one the list was typed against. The Claude screen says so.
 
 ## Recurring tasks
 
-Owner and executor tiers. A task is a schedule plus a payload, stored in the `tasks` table and registered with a cron loop inside the bot process. There are two kinds:
+For the owner and executors. A task is a schedule plus a payload. It is stored in the `tasks` table and run by a cron loop inside the bot process.
 
-- **`prompt`** — the payload is sent to the agent as the owner, on the task's clock, in a run slot of its own so it can never interrupt a live conversation. By default the session is not kept (see Which conversation a task keeps). Only the final answer is delivered. After delivery the answer is read once more: when it says the work could not be done — an expired token, no access, a refusal — the owner gets a short notice. The report, the stored status and the retry do not change. A report that checked and found nothing new counts as done.
-- **`script`** — the payload is code replayed through Executor with no model involved, so it costs nothing per run: on Executor v1 through its REST API, on v2 through its MCP `execute` tool. The result is tidied by one cheap read-only pass unless the task sets `raw`. A run that pauses for an approval reports its id: on v1 the execution's, on v2 the request's, with the tool and its question, which the owner sends back to the bot ("approve <id>" or "decline <id>", or for an input request the answer and the id), and the bot answers with Executor's `resume`, within 15 minutes, before Executor drops the request (v2 approves nothing by itself, but a read-only script never pauses). A resumed v2 run answers in that conversation; a gated script's state does not move on from it. A failure reports and waits for the next fire, with no retry.
+| Kind | Payload | Runs |
+| --- | --- | --- |
+| `prompt` | text sent to the agent as the owner | in a run slot of its own, so it never interrupts a live conversation. Only the final answer is delivered. |
+| `script` | code replayed through Executor, no model | free per run. Executor v1 uses its REST API; v2 uses its MCP `execute` tool. |
 
-**Which conversation a task keeps.** Three modes, the same for both kinds:
+- By default a `prompt` session is not kept (see Which conversation a task keeps).
+- After a `prompt` delivery, the bot reads the answer once more. If it says the work could not be done (an expired token, no access, a refusal), the owner gets a short notice. The report, stored status and retry do not change. A report that checked and found nothing new counts as done.
+- A `script` result is tidied by one cheap read-only pass, unless the task sets `raw`.
+- A failed script reports and waits for the next fire, with no retry.
 
-- **fresh** (the default) — every fire starts a new conversation, as above.
-- **own** — the task keeps one conversation of its own across fires, so a fire can build on the last one ("compare with yesterday"). Nobody else sees it, and it is never the private chat's conversation. It grows with every fire; the provider sums it up on its own when it gets long, and «Start over» (below) starts it over. A move to another provider or project starts a new one, and so does an edit by someone else that makes the task theirs: they never continue a conversation built on another person's powers. A fire that falls back to another provider because the task's own cannot run right now runs fresh and keeps the stored conversation for when it can.
-- **route** — each fire runs in the conversation of the task's chat and topic, as if its writer had sent the instruction there: the answer streams into the chat, the topic's own provider, model and project apply (the task's own choice does not), and a message sent there afterwards continues it. The chat must be the writer's own private chat with the bot or the work chat, so a route task needs a chat, cannot be silent, and needs to know who wrote it. A task an executor wrote with no user id on it is refused rather than run as the owner. A route fire spends no daily budget.
+### Script approvals
 
-A fire that finds its conversation busy — a run of anyone's there, a queue being drained, `/compact`, or a plan waiting for an answer — waits and checks again every 15 s; it never interrupts anyone, and `/stop` of the run it waits for does not drop it. Fires of one task always run one after another, so «Run now» no longer interrupts a fire that is running, and at most one fire per task waits: another press, cron tick or retry meanwhile joins it. A waiting fire lives in memory: a restart drops it quietly and the next tick runs the task. A route fire that never reached the chat (a refusal, a script failure, a pause for approval) is reported like any failure; one that did is shown only there, and when its retry fails too a short notice also goes to the notify route. A report a task's chat no longer takes (its topic was deleted) goes to the notify route instead, so a deleted topic does not fail unseen.
+A script that pauses for an approval reports an id, with the tool and its question. On v1 the id is the execution's; on v2 it is the request's.
 
-**Background work in a fire.** On Claude, with the owner's or an executor's full access, a fire of a `prompt` task (fresh or own; a route fire waits as its chat does) waits for background work it started, as a conversation does: a dynamic workflow, a Monitor, a background command or a wake-up. The fire's last answer, once that work reported, is its report, and it is what the success check reads. A fire with no free waiting slot (`MAX_BACKGROUND_RUNS`), unless its report still lands while the work finishes, and one that waited on wake-ups alone for 70 minutes with nothing happening, fail at once with a notice, even for a silent task, and are not retried. While a fire waits, later ticks of the task join one fire that runs after it, and «Run now» says so; a Monitor or wake-up the agent sets again each time keeps the fire waiting, so the fire is told its schedule brings the next run. «Stop» on the task ends its running or waiting fire with nothing sent, a fire still starting included, and drops the run queued behind it and a pending retry; deleting the task ends all of that too. For a script with its own conversation, «Stop» while the script itself runs cannot end it in Executor: the script runs to its end, and what it hands back (a prompt and its state) is dropped. A task deleted or paused through `tasks-cli.ts` is noticed within a minute: a deleted task's fire ends then, and a paused task's fire ends if it waits on background work (a turn still running ends with its report), with nothing sent; a fire started with «Run now» on a paused task keeps going. A restart does not lose the work: the fire is stopped as the restart begins and, once the bot is back, continued in the same session, one at a time with the conversations' resumes (workflows relaunched, a wake-up alone when it was due). It is not continued when the task was paused or deleted meanwhile (quietly), started over or switched between fresh and own (quietly; its next fire starts afresh), or retyped, switched to route, moved to another provider or project, lost full access, its provider is not available at boot, or it was already continued three times in a row; those are told to the notify route, with the cause. A fire stopped while the bot was continuing it stays stopped, and nothing runs in its place. A gated script's fire waits but is never continued: its next fire runs the script again. A fresh fire keeps its Claude session only while it may be continued, and deletes it once it ended; one the bot's process died in (a crash, an out-of-memory kill) is deleted at the next boot.
+Send back "approve <id>" or "decline <id>". For an input request, send the answer and the id. You have 15 minutes, before Executor drops the request. The bot then calls Executor's `resume`.
 
-A `script` task with a mode is a gate: Executor runs it with no model on every fire, and only when it hands back a prompt does the model run on it, in its own or its chat's conversation. The script sees what it kept last time as `taskState` (`null` at first; do not declare it yourself) and returns `{ state, prompt }`: `state` is kept for the next fire (at most 64 KiB of JSON; on Executor v2 it and the script together), `prompt` is what the model is told. A returned `{ state }` with no `prompt` (or a null one), a returned `null` or `{}`, empty output or exactly `__TASK_SKIP__` is a successful fire with no model run and nothing sent. Plain text output is the prompt as it is. A failed model run keeps the old state, so the retry sees the same change. A gated fire is never tidied, sent raw or judged: the model's answer is the report. So a mode changes what a script task does: a plain script given one sends its output to the model as an instruction, and a gate set back to fresh no longer gets `taskState` and posts its output as is (the Session screen of a script says so, and the CLI refuses `--session fresh` on a gate without a new `--payload`). Only the person who set up the script, or the owner, can switch it between fresh and a mode: a gate's output, often text someone else wrote, becomes an instruction on its writer's powers.
+v2 approves nothing by itself, but a read-only script never pauses. A resumed v2 run answers in that conversation. A gated script's state does not move on from it.
 
-Create one in the chat:
+### Which conversation a task keeps
+
+Three modes, the same for both kinds:
+
+- **fresh** (the default): every fire starts a new conversation.
+- **own**: the task keeps one conversation across fires, so a fire can build on the last one ("compare with yesterday"). Nobody else sees it. It is never the private chat's conversation. It grows with every fire, and the provider sums it up on its own when it gets long. «Start over» (below) resets it. It also starts anew on a move to another provider or project, or when someone else's edit makes the task theirs. Nobody continues a conversation built on another person's powers. A fire that falls back to another provider, because the task's own cannot run right now, runs fresh and keeps the stored conversation for later.
+- **route**: each fire runs in the conversation of the task's chat and topic, as if its writer sent the instruction there. The answer streams into the chat. The topic's own provider, model and project apply, not the task's own choice. A message sent there afterwards continues it.
+
+A route task needs a chat: the writer's own private chat with the bot, or the work chat. It cannot be silent and needs to know who wrote it. A task an executor wrote with no user id on it is refused rather than run as the owner. A route fire spends no daily budget.
+
+### Busy conversations
+
+A fire that finds its conversation busy waits and checks again every 15 s. Busy means a run of anyone's, a queue being drained, `/compact`, or a plan waiting for an answer. The fire never interrupts anyone, and `/stop` of the run it waits for does not drop it.
+
+- Fires of one task run one after another. «Run now» does not interrupt a running fire.
+- At most one fire per task waits. Another press, cron tick or retry joins it.
+- A waiting fire lives in memory. A restart drops it quietly, and the next tick runs the task.
+- A route fire that never reached the chat (a refusal, a script failure, a pause for approval) is reported like any failure. One that did is shown only there; if its retry fails too, a short notice goes to the notify route.
+- A report a task's chat no longer takes (its topic was deleted) goes to the notify route.
+
+### Background work in a fire
+
+On Claude, with the owner's or an executor's full access, a fire of a fresh or own `prompt` task waits for its background work, as a conversation does. That is a dynamic workflow, a Monitor, a background command or a wake-up. A route fire waits as its chat does. The fire's last answer, once the work reported, is its report, and the success check reads it.
+
+A fire fails at once with a notice, even for a silent task, and is not retried, when:
+
+- it has no free waiting slot (`MAX_BACKGROUND_RUNS`), unless its report still lands while the work finishes
+- it waited on wake-ups alone for 70 minutes with nothing happening
+
+While a fire waits:
+
+- Later ticks join one fire that runs after it. «Run now» says so.
+- A Monitor or wake-up the agent sets again each time keeps the fire waiting. So the fire is told its schedule brings the next run.
+- «Stop» ends the running or waiting fire with nothing sent (a fire still starting included), and drops the run queued behind it and a pending retry. Deleting the task does the same.
+- For a script with its own conversation, «Stop» while the script runs cannot end it in Executor. The script runs to its end, and what it hands back (a prompt and its state) is dropped.
+- A task deleted or paused through `tasks-cli.ts` is noticed within a minute. A deleted task's fire ends. A paused task's fire ends if it waits on background work; a turn still running ends with its report. Nothing is sent. A fire started with «Run now» on a paused task keeps going.
+
+A restart does not lose the work. The fire is stopped as the restart begins. Once the bot is back, it is continued in the same session, one at a time with the conversations' resumes (workflows relaunched, a wake-up alone when it was due).
+
+It is not continued, and nothing is said, when the task was paused or deleted meanwhile, started over, or switched between fresh and own (its next fire starts afresh). It is not continued, and the notify route is told the cause, when the task:
+
+- was retyped, switched to route, or moved to another provider or project
+- lost full access, or its provider is not available at boot
+- was already continued three times in a row
+
+A fire stopped while the bot was continuing it stays stopped, and nothing runs in its place. A gated script's fire waits but is never continued; its next fire runs the script again.
+
+A fresh fire keeps its Claude session only while it may be continued, and deletes it once it ended. One the bot's process died in (a crash, an out-of-memory kill) is deleted at the next boot.
+
+### Gate scripts
+
+A `script` task with a mode is a gate. Executor runs it with no model on every fire. The model runs only when the script hands back a prompt, in the task's own or its chat's conversation.
+
+The script sees what it kept last time as `taskState` (`null` at first; do not declare it yourself). It returns `{ state, prompt }`:
+
+- `state` is kept for the next fire. At most 64 KiB of JSON; on Executor v2, it and the script together.
+- `prompt` is what the model is told.
+
+| Script output | Result |
+| --- | --- |
+| `{ state }` with no `prompt` (or a null one), `null`, `{}`, empty output, or exactly `__TASK_SKIP__` | successful fire, no model run, nothing sent |
+| plain text | the prompt, as it is |
+
+- A failed model run keeps the old state, so the retry sees the same change.
+- A gated fire is never tidied, sent raw or judged. The model's answer is the report.
+- A plain script given a mode sends its output to the model as an instruction. A gate set back to fresh gets no `taskState` and posts its output as is. The Session screen of a script says so. The CLI refuses `--session fresh` on a gate without a new `--payload`.
+- Only the person who set up the script, or the owner, can switch it between fresh and a mode. A gate's output, often text someone else wrote, becomes an instruction on its writer's powers.
+
+### Create a task
+
+Create one in the chat, as one message.
 
 ```
 /task add
@@ -203,13 +503,55 @@ type: prompt
 Tell me what came to my email overnight.
 ```
 
-`cron` is standard five-field `minute hour day-of-month month day-of-week`; `tz` is an IANA zone. Optional header lines: `enabled: false` (created paused), `raw: true` (deliver output untouched), `project`, `session: own` or `session: route` (route not together with `silent: true`, and only in your private chat with the bot or the work chat). The whole form has to be one message.
+`cron` is standard five-field `minute hour day-of-month month day-of-week`. `tz` is an IANA zone.
 
-`/tasks` lists them, each with Pause/Resume, Run now and Delete buttons; Stop, on a task whose fire runs the model in a slot of its own (a fresh or own prompt task, a gated script with its own conversation; a route task has its chat's `/stop`), which ends its running, starting or waiting fire with nothing sent, drops a run queued behind it and a pending retry, and keeps a fire the restart cut from being continued (the next scheduled run fires as usual); and Session, which picks the mode and, once one is set, «Start over»: an own task starts a new conversation at its next fire; a route task's chat conversation is cleared as `/new` does there (a plan waiting for an answer is dropped too), at once when nothing runs there, else as soon as it is free (in a private chat outside a topic and in the work chat's General topic that is the conversation of the current project). Picking a mode does not make the task yours: it keeps the powers of whoever wrote it. Run now on a task with a mode says it may wait, and a second press says it already waits its turn (and runs it even if the task was paused meanwhile). A Codex run can manage the same table through `packages/agent/scripts/tasks-cli.ts` (`list|add|update|delete`, cron and timezone validated the same way; `--session <fresh|own|route>` and `update --reset-session` set the mode and start over, without changing who wrote the task (`--session route` is refused for a task whose writer has no user id, or in another user's private chat; repeating the mode a task already has keeps its conversation); `list` ends each row with the mode and `session <id|none>`, plus `reset pending`); the bot notices a change made there within a minute, a reset included.
+| Optional line | Effect |
+| --- | --- |
+| `enabled: false` | created paused |
+| `raw: true` | deliver output untouched |
+| `project` | the project |
+| `session: own` or `session: route` | the mode. Route is not allowed with `silent: true`, and works only in your private chat with the bot or the work chat. |
 
-**What a prompt task runs on.** By default, what its writer's new conversations start on (New chats in `/settings`), read again at every fire: change the default provider to Claude and the model to Sol, and the next fire runs on Opus. If that provider cannot run, the fire goes to the first one that can: a chosen model and depth carry over to it, and an Auto one takes that provider's own default. When the default model or effort is Auto, the first fire routes the task's text and keeps that pick for later fires. Editing the text or the choice below, or a move to another provider, routes it again. A prompt task's Model button in `/tasks` sets its own Who answers, Model and Depth; a route task has none (the chat's own choice applies), and a gated script with its own conversation has it for the model it wakes. «As in settings» there follows the writer's defaults. `tasks-cli` sets the same with `--provider`, `--model <tier>` and `--effort <level>`, and `auto` follows the defaults again.
+### Manage tasks
 
-Script tasks need `EXECUTOR_MCP_URL` and `EXECUTOR_API_KEY`. On v1 the REST base is derived from the MCP url's origin; on v2 the script goes to the MCP url itself. `EXECUTOR_VERSION` picks the generation, and left unset it follows the url: `mcp.executor.sh` is v2, anything else v1.
+`/tasks` lists them, each with these buttons:
+
+| Button | Does |
+| --- | --- |
+| Pause/Resume | pauses or resumes the task |
+| Run now | runs it. On a task with a mode, it says it may wait. A second press says it already waits its turn, and runs it even if the task was paused meanwhile. |
+| Delete | deletes it |
+| Stop | ends the running, starting or waiting fire with nothing sent, drops a queued run and a pending retry, and keeps a fire the restart cut from being continued. The next scheduled run fires as usual. For fresh or own prompt tasks and gated scripts with their own conversation. A route task uses its chat's `/stop`. |
+| Session | picks the mode. Once one is set, it also offers «Start over». |
+
+«Start over» on an own task starts a new conversation at its next fire. On a route task, it clears the chat conversation as `/new` does there, and a plan waiting for an answer is dropped too. This happens at once when nothing runs there, else as soon as the chat is free. In a private chat outside a topic, and in the work chat's General topic, it is the conversation of the current project.
+
+Picking a mode does not make the task yours. It keeps the powers of whoever wrote it.
+
+A Codex run can manage tasks through `packages/agent/scripts/tasks-cli.ts` (`list|add|update|delete`). Cron and time zone are checked the same way.
+
+- `--session <fresh|own|route>` and `update --reset-session` set the mode and start over, without changing who wrote the task.
+- Repeating the mode a task already has keeps its conversation.
+- `--session route` is refused for a task whose writer has no user id, or in another user's private chat.
+- `list` ends each row with the mode and `session <id|none>`, plus `reset pending`.
+- The bot notices a change made there within a minute, a reset included.
+
+### What a prompt task runs on
+
+By default, a prompt task runs on what its writer's new conversations start on (New chats in `/settings`), read again at every fire. Example: set the default provider to Claude and the model to Sol, and the next fire runs on Opus.
+
+- If that provider cannot run, the fire goes to the first one that can. A chosen model and depth carry over. An Auto one takes that provider's own default.
+- When the default model or effort is Auto, the first fire routes the task's text and keeps that pick. Editing the text or the choice below, or a move to another provider, routes it again.
+- The task's Model button in `/tasks` sets its own Who answers, Model and Depth. A route task has none (the chat's own choice applies). A gated script with its own conversation has it for the model it wakes. «As in settings» follows the writer's defaults.
+- `tasks-cli` sets the same with `--provider`, `--model <tier>` and `--effort <level>`. `auto` follows the defaults again.
+
+### Executor setup
+
+Script tasks need `EXECUTOR_MCP_URL` and `EXECUTOR_API_KEY`.
+
+- On v1, the REST base comes from the MCP url's origin.
+- On v2, the script goes to the MCP url itself.
+- `EXECUTOR_VERSION` picks the generation. Unset, it follows the url: `mcp.executor.sh` is v2, anything else v1.
 
 ## Personal rules and skills
 
@@ -220,6 +562,12 @@ Anything you ask the assistant to remember is written into your workspace, not i
 <work dir>/.agents/skills/<slug>/SKILL.md   one workflow, when a rule is too small
 ```
 
-Say «remember …» — a preference, a shortcut, a convention, how a recurring job should be done — and the run appends it to `AGENTS.md` itself and tells you it saved it. Every later session reads that file before it acts, so a rule survives `/new`, a restart and a redeploy. When what you describe is a multi-step workflow for one service (an API, a dashboard, a report), it writes a skill under `.agents/skills/` instead and links it from `AGENTS.md`.
+Say «remember …» (a preference, a shortcut, a convention, how a recurring job should be done). The run appends it to `AGENTS.md` and tells you it saved it. Every later session reads that file first, so a rule survives `/new`, a restart and a redeploy. For a multi-step workflow for one service (an API, a dashboard, a report), the run writes a skill under `.agents/skills/` and links it from `AGENTS.md`.
 
-Both files are yours: edit them by hand whenever you like — no restart needed, they are read at the start of each session. On Claude and pi the bot puts the text of `AGENTS.md` into the run itself, with your global rules for that CLI (`~/.claude/CLAUDE.md`, pi's `~/.pi/agent/AGENTS.md`), read again on every message, so the run does not spend a step reading them. A line that is only `@<path>` (for example `@~/notes/CONTEXT.md`) brings that file in too, as Claude Code's own imports do, up to about 40,000 characters in all. Codex reads `AGENTS.md` itself. Neither lives in this repo, so neither is touched by a self-update or a fresh clone. They are created on first use; nothing needs to exist beforehand. Only your own and executor runs are told about them, in private chats, the workspace forum and their tasks — a group, guest or member run is sandboxed elsewhere and never sees them.
+Both files are yours. Edit them by hand any time. No restart is needed: they are read at the start of each session.
+
+- On Claude and pi, the bot puts the text of `AGENTS.md` into the run, with your global rules for that CLI (`~/.claude/CLAUDE.md`, pi's `~/.pi/agent/AGENTS.md`), read again on every message. So the run does not spend a step reading them.
+- A line that is only `@<path>` (for example `@~/notes/CONTEXT.md`) brings that file in too, as Claude Code's own imports do, up to about 40,000 characters in all.
+- Codex reads `AGENTS.md` itself.
+- Neither file lives in this repo, so a self-update or a fresh clone does not touch them. They are created on first use; nothing needs to exist beforehand.
+- Only your own and executor runs see them (private chats, the workspace forum and their tasks). A group, guest or member run is sandboxed elsewhere and never sees them.

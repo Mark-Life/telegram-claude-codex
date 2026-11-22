@@ -1,71 +1,117 @@
 # HTTP API
 
-The same bot, a different door. Programs (Codex, ChatGPT through [Executor](https://executor.sh), webhooks, pipelines, your own scripts) call it over HTTP with an API key. A key acts exactly as the Telegram user who made it, as if they wrote to the bot in a private chat. Off by default.
+Call the bot over HTTP with an API key. Use it from scripts, webhooks, pipelines, Codex, or ChatGPT through [Executor](https://executor.sh). A key acts as the Telegram user who made it, as in a private chat with the bot. Off by default.
 
 ## Turn it on
 
-1. In `.env`: `API_ENABLED=true`, a free `API_PORT` (default `8787`) and `API_PUBLIC_URL`, the HTTPS address clients will use (for example `https://bot.example.com`). See [Configuration](configuration.md).
-2. Restart the bot. The journal says `HTTP API on 127.0.0.1:<port>, public at <url>`. If something else already holds the port (`wrangler dev` uses `8787` too), the bot still starts, without the API: the journal says `HTTP API not started: port <port> unavailable` and the owner gets a private message. Pick another `API_PORT` and restart.
-3. Put a reverse proxy with HTTPS in front of the port. The server always binds `127.0.0.1` and never terminates TLS itself. For Caddy, use [`deploy/bot-api.caddy.example`](../deploy/bot-api.caddy.example).
-4. Make a key: `/apikeys` in a private chat with the bot.
+1. In `.env`, set `API_ENABLED=true`, a free `API_PORT` (default `8787`) and `API_PUBLIC_URL`. This is the HTTPS address clients use, for example `https://bot.example.com`. See [Configuration](configuration.md).
+2. Restart the bot. The journal says `HTTP API on 127.0.0.1:<port>, public at <url>`.
+3. Put an HTTPS reverse proxy in front of the port. The server binds `127.0.0.1` only and never terminates TLS. For Caddy, use [`deploy/bot-api.caddy.example`](../deploy/bot-api.caddy.example).
+4. Make a key with `/apikeys` in a private chat with the bot.
 
-Check it from the server: `curl -s http://127.0.0.1:8787/v1/health` answers `{"status":"ok"}`.
+If the port is taken (`wrangler dev` also uses `8787`), the bot still starts without the API. The journal says `HTTP API not started: port <port> unavailable` and the owner gets a private message. Pick another `API_PORT` and restart.
+
+Check from the server: `curl -s http://127.0.0.1:8787/v1/health` answers `{"status":"ok"}`.
 
 ## Keys
 
 A key looks like `pab_<id>_<secret>`. Only the owner and executors can hold keys, each their own.
 
-- **Make one** with `/apikeys` → «New key», then send a name (one line, up to 64 characters). The bot sends the key once, in a message it deletes after 10 minutes. Copy it into the client right away; for Executor, paste it into its secure connect page, never into a chat. The bot keeps only a sha256 of the secret, so a lost key cannot be shown again: make a new one.
-- An owner or executor run in your private chat with the bot can make one too when you ask it (`packages/agent/scripts/apikeys-cli.ts`, documented for the run in the `bot-api-keys` skill). Runs elsewhere (the workspace forum, a task that does not hold your Telegram account) are not offered it: use `/apikeys` in the private chat. It never prints the key: it sends it to your private chat with the bot the same way, and revokes the key if that message cannot be sent.
-- **List and revoke** in `/apikeys` → «My keys» (the owner's «All keys» shows everyone's), in the CLI, or over the API (`keys.list`, `keys.revoke`). Keys are never made over the API, so a leaked key cannot mint more.
-- **Tier is read on every request.** Demote an executor to member or revoke them, and their keys stop working at once (`403 Forbidden`); give the tier back and they work again. Revoking a key is permanent. A run the key started that is still working stops too: at once when the key is revoked in `/apikeys` or over the API, within a few seconds after a revoke in the CLI or a demotion.
-- When an executor makes a key, the owner gets a message. Every key made, revoked, moved to another user, given another secret or deleted outside the bot (a run can write `.data/bot.db` directly) is reported to the owner by the access watcher, like a tier change.
+| Task | How |
+| --- | --- |
+| Make a key | `/apikeys` → «New key», then send a name (one line, up to 64 characters). |
+| List keys | `/apikeys` → «My keys». The owner's «All keys» shows everyone's. Also CLI or `keys.list`. |
+| Revoke a key | `/apikeys`, the CLI, or `keys.revoke`. Revoking is permanent. |
 
-**Treat a key like the bot itself.** It gets everything its holder gets in a private chat. An owner's or executor's runs have the whole machine (shell, `.env`, `.data`) and the owner's Telegram account, so an executor's key is not a smaller power than the owner's in practice.
+- The bot sends the key once, in a message it deletes after 10 minutes.
+- Copy it into the client at once. For Executor, use its secure connect page, never a chat.
+- The bot stores only a sha256 of the secret. A lost key cannot be shown again: make a new one.
+- Keys are never made over the API, so a leaked key cannot mint more.
+- An owner or executor run in your private chat can also make a key when you ask (`packages/agent/scripts/apikeys-cli.ts`, see the `bot-api-keys` skill). It never prints the key. It sends it to your private chat the same way, and revokes the key if that message fails.
+- Runs elsewhere (the workspace forum, a task that does not hold your Telegram account) cannot make keys. Use `/apikeys` in the private chat.
+
+Your tier is read on every request. If an executor is demoted or revoked, their keys get `403 Forbidden` at once. They work again if the tier returns.
+
+A run the key started stops too. It stops at once after a revoke in `/apikeys` or over the API. It stops within a few seconds after a revoke in the CLI or a demotion.
+
+The owner gets a message when an executor makes a key. The access watcher reports every key made, revoked, moved to another user, given another secret or deleted outside the bot, like a tier change. A run can write `.data/bot.db` directly.
+
+**Treat a key like the bot itself.** It gets everything its holder gets in a private chat. Owner and executor runs have the whole machine (shell, `.env`, `.data`) and the owner's Telegram account. An executor's key is not a smaller power than the owner's in practice.
 
 ## Calling it
 
-Send the key as `Authorization: Bearer <key>` or as `x-api-key: <key>`. Everything but `GET /v1/health`, `GET /openapi.json` and `GET /docs` needs it.
+Send the key as `Authorization: Bearer <key>` or `x-api-key: <key>`. Only `GET /v1/health`, `GET /openapi.json` and `GET /docs` need no key.
 
-| Method | Path | operationId | What it does |
-| --- | --- | --- | --- |
-| GET | `/v1/health` | `health.get` | public: the bot is up |
-| GET | `/v1/me` | `me.get` | who the key acts as: `telegramUserId`, `tier`, `keyId`, `keyName` |
-| GET | `/v1/keys` | `keys.list` | live keys of the key's user; every key for the owner |
-| POST | `/v1/keys/{keyId}/revoke` | `keys.revoke` | revoke one of them (any key, for the owner) |
-| GET | `/v1/tasks` | `tasks.list` | every recurring task, with `nextRunAt` |
-| GET | `/v1/tasks/{taskId}` | `tasks.get` | one task |
-| POST | `/v1/tasks` | `tasks.create` | a new task |
-| PATCH | `/v1/tasks/{taskId}` | `tasks.update` | change only the fields sent; `enabled` pauses or resumes |
-| DELETE | `/v1/tasks/{taskId}` | `tasks.delete` | delete it, stopping a fire that runs or waits (204) |
-| POST | `/v1/tasks/{taskId}/run` | `tasks.runNow` | fire it now, in the background (202, `{admitted: "queued" \| "coalesced"}`) |
-| GET | `/v1/reminders?date=&from=&to=&tz=` | `reminders.list` | reminders in due order, undated last, optionally for local days |
-| POST | `/v1/reminders` | `reminders.create` | a reminder (`at`, ISO 8601 with an offset) or an undated to-do |
-| PATCH | `/v1/reminders/{reminderId}` | `reminders.update` | new `text`, `at` (`null` undates it) or `tz` |
-| POST | `/v1/reminders/{reminderId}/complete` | `reminders.complete` | done: off the list, its topic closed |
-| DELETE | `/v1/reminders/{reminderId}` | `reminders.delete` | the same as complete, as in the CLI (204) |
-| POST | `/v1/notify` | `notify.send` | `{text, to: "me" \| "workspace"}`: a plain message from the bot, link previews off |
-| POST | `/v1/runs` | `runs.create` | start an agent run (202, `{runId, status}`); `Idempotency-Key` header |
-| GET | `/v1/runs/{runId}?waitSec=0..20` | `runs.get` | the run's status and answer, waiting up to `waitSec` for it to end |
-| POST | `/v1/runs/{runId}/cancel` | `runs.cancel` | stop a running run |
-| GET | `/v1/settings/mine` | `settings.getMine` | your own defaults for new conversations: provider, model, effort |
-| PATCH | `/v1/settings/mine` | `settings.updateMine` | change them |
-| GET | `/v1/settings/bot` | `settings.getBot` | owner: the bot's settings (language, replies, time zone, limits, groups, workspace, account) |
-| PATCH | `/v1/settings/bot` | `settings.updateBot` | owner: change them; `workspace: null` unlinks the workspace |
-| GET | `/v1/settings/light` | `settings.getLight` | owner: what light runs run on: groups, guests, members, Business replies |
-| PATCH | `/v1/settings/light` | `settings.updateLight` | owner: change it |
-| GET | `/v1/settings/helpers` | `settings.getHelpers` | owner: the `format`, `judge` and `title` helper passes |
-| PATCH | `/v1/settings/helpers/{use}` | `settings.updateHelper` | owner: change one pass |
-| GET | `/v1/settings/voice` | `settings.getVoice` | owner: the voice-reply model and voice, and the voices to pick from |
-| PATCH | `/v1/settings/voice` | `settings.updateVoice` | owner: change them |
-| GET | `/v1/settings/providers` | `settings.getProviders` | owner: each provider's own settings, with the values they take |
-| PATCH | `/v1/settings/providers/{provider}` | `settings.updateProvider` | owner: change some of them; `null` goes back to the provider's default |
+| Request | operationId | What it does |
+| --- | --- | --- |
+| GET `/v1/health` | `health.get` | bot is up (no key) |
+| GET `/v1/me` | `me.get` | `telegramUserId`, `tier`, `keyId`, `keyName` |
+| GET `/v1/keys` | `keys.list` | live keys; all keys for the owner |
+| POST `/v1/keys/{keyId}/revoke` | `keys.revoke` | revoke a key (any key, for the owner) |
+| GET `/v1/tasks` | `tasks.list` | all recurring tasks, with `nextRunAt` |
+| GET `/v1/tasks/{taskId}` | `tasks.get` | one task |
+| POST `/v1/tasks` | `tasks.create` | new task |
+| PATCH `/v1/tasks/{taskId}` | `tasks.update` | change sent fields; `enabled` pauses or resumes |
+| DELETE `/v1/tasks/{taskId}` | `tasks.delete` | delete; stops a running or waiting fire (204) |
+| POST `/v1/tasks/{taskId}/run` | `tasks.runNow` | fire now, in the background (202, `{admitted: "queued" \| "coalesced"}`) |
+| GET `/v1/reminders?date=&from=&to=&tz=` | `reminders.list` | due order, undated last; optionally for local days |
+| POST `/v1/reminders` | `reminders.create` | reminder (`at`, ISO 8601 with an offset) or undated to-do |
+| PATCH `/v1/reminders/{reminderId}` | `reminders.update` | `text`, `at` (`null` undates), `tz` |
+| POST `/v1/reminders/{reminderId}/complete` | `reminders.complete` | mark done, close its topic |
+| DELETE `/v1/reminders/{reminderId}` | `reminders.delete` | same as complete, as in the CLI (204) |
+| POST `/v1/notify` | `notify.send` | `{text, to: "me" \| "workspace"}`: a plain message, link previews off |
+| POST `/v1/runs` | `runs.create` | start a run (202, `{runId, status}`); `Idempotency-Key` header |
+| GET `/v1/runs/{runId}?waitSec=0..20` | `runs.get` | status and answer; waits up to `waitSec` |
+| POST `/v1/runs/{runId}/cancel` | `runs.cancel` | stop a run |
+| GET `/v1/settings/mine` | `settings.getMine` | your defaults: provider, model, effort |
+| PATCH `/v1/settings/mine` | `settings.updateMine` | change |
+| GET `/v1/settings/bot` | `settings.getBot` | owner: language, replies, time zone, limits, groups, workspace, account |
+| PATCH `/v1/settings/bot` | `settings.updateBot` | owner: change; `workspace: null` unlinks |
+| GET `/v1/settings/light` | `settings.getLight` | owner: light-run settings (groups, guests, members, Business) |
+| PATCH `/v1/settings/light` | `settings.updateLight` | owner: change |
+| GET `/v1/settings/helpers` | `settings.getHelpers` | owner: `format`, `judge`, `title` helper passes |
+| PATCH `/v1/settings/helpers/{use}` | `settings.updateHelper` | owner: change one pass |
+| GET `/v1/settings/voice` | `settings.getVoice` | owner: voice-reply model and voice, and the voices to pick from |
+| PATCH `/v1/settings/voice` | `settings.updateVoice` | owner: change |
+| GET `/v1/settings/providers` | `settings.getProviders` | owner: per-provider settings, with the values they take |
+| PATCH `/v1/settings/providers/{provider}` | `settings.updateProvider` | owner: change; `null` restores default |
 
-- `GET /openapi.json` is the OpenAPI 3.1 document, with `API_PUBLIC_URL` as its server. Executor imports it as typed tools named by the operationIds. `GET /docs` is the same document as a readable page.
-- Errors are JSON `{"_tag": "...", "message": "..."}` with the status: `Unauthorized` 401 (no key, a wrong one, a revoked one), `Forbidden` 403 (the holder lost owner or executor access, or may not do this one thing), `NotFound` 404, `Conflict` 409 (the bot's state does not allow it now, such as no workspace, or an `Idempotency-Key` reused with another body), `InvalidInput` 422 (the request did not match the schema, or the bot's rules refused it; `message` says what to change), `PayloadTooLarge` 413 (the body is over the cap below), `RateLimited` 429, `Unavailable` 503 (Telegram failed, or every agent run slot is busy; nothing was done).
-- **Rate limits**, per key: 60 reads a minute, 20 writes a minute and 20 agent runs an hour, each refilling gradually (a run counts only once it starts: a refusal or an `Idempotency-Key` replay costs none of the hour's runs); and at most 2 runs of one user going at once. A client address that sends 20 bad keys in a minute waits too. A 429 carries `Retry-After` and `retryAfterSec`. Behind the proxy, the client address is the last `X-Forwarded-For` entry, the one the proxy added.
-- A request body is capped at 964096 bytes (about 940 KiB): a `runs.create` at its longest prompt and input fits even with every character `\uXXXX`-escaped. A larger one gets `PayloadTooLarge` 413 and nothing is done.
-- Every key made or revoked, and every API request that changes something, is a `telegram.api` line in `.data/events.jsonl`: who, which key, which operation, and how it ended. Never a body or a key.
+`GET /openapi.json` is the OpenAPI 3.1 document, with `API_PUBLIC_URL` as its server. Executor imports it as typed tools named by the operationIds. `GET /docs` shows it as a page.
+
+### Errors
+
+Errors are JSON `{"_tag": "...", "message": "..."}`.
+
+| Status | `_tag` | Meaning |
+| --- | --- | --- |
+| 401 | `Unauthorized` | No key, a wrong one, or a revoked one. |
+| 403 | `Forbidden` | The holder lost owner or executor access, or may not do this. |
+| 404 | `NotFound` |  |
+| 409 | `Conflict` | Bot state does not allow it now (such as no workspace), or an `Idempotency-Key` reused with another body. |
+| 413 | `PayloadTooLarge` | Body over the cap below. Nothing is done. |
+| 422 | `InvalidInput` | Schema mismatch or a bot rule refused it. `message` says what to change. |
+| 429 | `RateLimited` | See below. |
+| 503 | `Unavailable` | Telegram failed, or every agent run slot is busy. Nothing was done. |
+
+### Limits
+
+| Limit      | Value                                              |
+| ---------- | -------------------------------------------------- |
+| Reads      | 60 a minute per key                                |
+| Writes     | 20 a minute per key                                |
+| Agent runs | 20 an hour per key; at most 2 of one user at once  |
+| Bad keys   | 20 a minute from one client address, then it waits |
+| Body size  | 964096 bytes (about 940 KiB)                       |
+
+- Each rate limit refills gradually.
+- The body cap fits a `runs.create` at its longest prompt and input, even with every character `\uXXXX`-escaped. A larger body gets `PayloadTooLarge` 413 and nothing is done.
+- A run counts only once it starts. A refusal or an `Idempotency-Key` replay costs none of the hour's runs.
+- A 429 carries `Retry-After` and `retryAfterSec`.
+- Behind the proxy, the client address is the last `X-Forwarded-For` entry, the one the proxy added.
+
+### Audit log
+
+Every key made or revoked, and every API request that changes something, is a `telegram.api` line in `.data/events.jsonl`. It records who, which key, which operation, and how it ended. Never a body or a key.
 
 ```bash
 curl -s -H "Authorization: Bearer $KEY" https://bot.example.com/v1/me
@@ -73,12 +119,29 @@ curl -s -H "Authorization: Bearer $KEY" https://bot.example.com/v1/me
 
 ## Tasks, reminders and notices
 
-These are the same as in Telegram, under the same rules, because every door goes through the same code: `/tasks`, `/reminders`, the bot's CLIs and the API.
+Same rules as in Telegram (`/tasks`, `/reminders`, the CLIs).
 
-- **Tasks** are shared by the owner and executors, as in `/tasks`. A change to what a task does or where it reports (`payload`, `type`, `project`, `chatId`, `threadId`) makes it yours: it then runs with your powers. A pause, a rename, a new schedule or run choice keeps its writer. Only the task's writer or the owner may make a script a gate (`sessionMode` `own` or `route` on a script) or a gate a plain script without a new `payload`. A `route` task runs in your own private chat with the bot (`chatId` = your Telegram user id, see `me.get`) or the workspace. Without `chatId` a task is silent: only its failures reach the owner. `provider`, `modelTier` and `effortLevel` left out (or `null` on update) follow the writer's `/settings`.
-- A task change over the API is in the scheduler at once, as from `/tasks`; one made with the tasks CLI is picked up within a minute.
-- **Reminders** take `at` as ISO 8601 with `Z` or an offset (`2026-09-08T09:00:00+03:00`); resolve "tomorrow at 9" to one first. `tz` defaults to the home zone from `/settings`, else `DEFAULT_TZ`. The bot sends a dated reminder in its own topic when it is due, within 30 seconds.
-- **Notices** (`notify.send`) go to your own private chat with the bot, or, for the owner, to the workspace topic. They are plain text, at most 4096 characters, with link previews off, and the bot does not answer them. A user who never started the bot gets `Conflict`.
+**Tasks** are shared by the owner and executors, as in `/tasks`.
+
+- A change to `payload`, `type`, `project`, `chatId` or `threadId` makes the task yours. It then runs with your powers.
+- A pause, rename, new schedule or run choice keeps the task's writer.
+- Only the writer or the owner may make a script a gate (`sessionMode` `own` or `route` on a script), or make a gate a plain script without a new `payload`.
+- A `route` task runs in your private chat with the bot (`chatId` = your Telegram user id, see `me.get`) or in the workspace.
+- A task without `chatId` is silent. Only its failures reach the owner.
+- If `provider`, `modelTier` and `effortLevel` are left out (or `null` on update), they follow the writer's `/settings`.
+- A change over the API reaches the scheduler at once. A change made with the tasks CLI is picked up within a minute.
+
+**Reminders**:
+
+- `at` is ISO 8601 with `Z` or an offset (`2026-09-08T09:00:00+03:00`). Resolve "tomorrow at 9" to one first.
+- `tz` defaults to the home zone from `/settings`, else `DEFAULT_TZ`.
+- A dated reminder is sent in its own topic when due, within 30 seconds.
+
+**Notices** (`notify.send`):
+
+- Go to your private chat with the bot. The owner can send to the workspace topic instead.
+- Plain text, at most 4096 characters, link previews off. The bot does not answer them.
+- A user who never started the bot gets `Conflict`.
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
@@ -87,7 +150,7 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/js
 
 ## Agent runs
 
-`runs.create` is the bot doing what you ask, as if you wrote it to the bot in your private chat: the same model choice (`/settings`), the same skills, the same machine. It runs in the background; the call answers at once with a `runId`.
+`runs.create` works as if you wrote to the bot in your private chat: same model choice (`/settings`), skills and machine. It runs in the background and answers at once with a `runId`.
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
@@ -98,29 +161,72 @@ curl -s -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/js
 curl -s -H "Authorization: Bearer $KEY" "https://bot.example.com/v1/runs/12?waitSec=20"
 ```
 
-- **`prompt`** (up to 32000 characters) is what you would write to the bot. **`input`** (up to 128000) is data it works on, an email or a webhook body: it comes after the prompt, fenced and marked as data. Marking it is no defence: text in it can still steer the run, so run untrusted input with `profile: "guest"`.
-- **`profile`**: `full` (the default) gets exactly what you get in your private chat: an owner's or executor's run has the shell, `.env`, your connected services and the owner's Telegram account. `guest` gets what a stranger gets there: read-only in a scratch directory, web search, no secrets in its environment, no connected services, no Telegram account, the light model.
-- **`deliver`**: `never` (the default) leaves the answer here only. `always` also sends it to your private chat with the bot, under a line naming the key. `agent` lets the run decide: it is sent unless the answer is exactly `__TASK_SKIP__`, the same word a silent task uses. The answer still comes back here either way, so a pipeline can branch on it; check `status` too, since a failed run sends nothing.
-- **Statuses**: `running`, then `succeeded` (with `result`), `failed` (with `error`), `cancelled` (by `runs.cancel`, or because its key was revoked or its holder lost the tier it started at) or `interrupted` (the bot restarted while it worked: start it again). There is no queue: when every run slot is busy, `runs.create` answers `Unavailable` with `Retry-After` and starts nothing.
-- **`result`**: `text`, the final answer, cut at 8000 characters (`truncated`); `notified` `{chatId, messageId}` when the bot sent it to your chat; `costUsd` when the provider reports one (none of today's do).
-- **`pendingAccountActions`** `[{id, kind}]`, beside `status` on a run of any status: writes the run asked to make on the owner's Telegram account that still wait for the button. A cancelled or failed run's writes can still be approved, so they are listed too.
-- **`runs.get?waitSec=20`** waits up to 20 seconds for a running run to end before it answers, so a loop of it follows a run without busy polling. A run is visible to its key's user; the owner sees every run.
-- **`runs.cancel`** stops a running run and answers it a few seconds later, `cancelled` once it stopped. What it already did stays done.
-- **`Idempotency-Key`**: send any unique string with `runs.create` to make a retry safe. The same key with the same body answers the run the first call started; with another body it is `Conflict`. Keys are kept per API key, for good.
-- **A run keeps no conversation.** Every run starts fresh, never continues your chat, and leaves nothing for your next message there. It takes the bot's lower-priority slots, so it never takes the one kept for the owner. It does not wait on background work it starts: its last answer is its result.
-- **Writes as the owner always wait for the button**, whatever `TELEGRAM_ACCOUNT_WRITES` or `/settings` say, and the confirmation says which API key's run asked.
-- A restart waits for running API runs as it waits for chat runs; a run cut anyway is `interrupted` after the boot.
+### Request fields
+
+| Field | Values |
+| --- | --- |
+| `prompt` | Up to 32000 characters. What you would write to the bot. |
+| `input` | Up to 128000 characters. Data to work on, such as an email or webhook body. It comes after the prompt, fenced and marked as data. |
+| `profile` | `full` (default): what you get in your private chat. Owner and executor runs have the shell, `.env`, connected services and the owner's Telegram account. `guest`: what a stranger gets. Read-only in a scratch directory, web search, no secrets, no connected services, no Telegram account, light model. |
+| `deliver` | `never` (default): answer stays here. `always`: also sent to your private chat, under a line naming the key. `agent`: the run decides. It is sent unless the answer is exactly `__TASK_SKIP__`, the word a silent task uses. |
+
+Marking `input` as data is no defence. Text in it can still steer the run. Run untrusted input with `profile: "guest"`.
+
+The answer also comes back here, so a pipeline can branch on it. Check `status`: a failed run sends nothing.
+
+### Statuses
+
+| Status | Meaning |
+| --- | --- |
+| `running` | Working. |
+| `succeeded` | Done, with `result`. |
+| `failed` | Failed, with `error`. |
+| `cancelled` | Stopped by `runs.cancel`, or its key was revoked, or its holder lost the tier it started at. |
+| `interrupted` | The bot restarted mid-run. Start it again. |
+
+There is no queue. When every run slot is busy, `runs.create` answers `Unavailable` with `Retry-After` and starts nothing.
+
+### Result and polling
+
+- **`result`**: `text` is the final answer, cut at 8000 characters (`truncated`). `notified` is `{chatId, messageId}` when the bot sent it to your chat. `costUsd` appears when the provider reports one (none do today).
+- **`pendingAccountActions`** `[{id, kind}]` sits beside `status` on a run of any status. It lists writes the run asked for on the owner's Telegram account that still wait for the button. A cancelled or failed run's writes can still be approved.
+- **`runs.get?waitSec=20`** waits up to 20 seconds for the run to end. Loop it to follow a run without busy polling.
+- A run is visible to its key's user. The owner sees every run.
+- **`runs.cancel`** stops a running run. It answers a few seconds later, `cancelled` once the run stopped. What it already did stays done.
+- **`Idempotency-Key`**: send any unique string with `runs.create` to make a retry safe. The same key and body answers the run the first call started. The same key with another body is `Conflict`. Keys are kept per API key, for good.
+
+### Behavior
+
+- A run keeps no conversation. Every run starts fresh, never continues your chat, and leaves nothing for your next message there.
+- It uses lower-priority slots, never the one kept for the owner.
+- It does not wait on background work it starts. Its last answer is its result.
+- Writes as the owner always wait for the button, whatever `TELEGRAM_ACCOUNT_WRITES` or `/settings` say. The confirmation names the API key whose run asked.
+- A restart waits for running API runs, as it waits for chat runs. A run cut anyway is `interrupted` after boot.
 
 ## Settings
 
-The same settings as `/settings` in Telegram, under the same rules: every door goes through the same code, so a value Telegram would not offer is refused here too, and a change made here is in Telegram at once (and the other way round).
+Same settings and rules as `/settings` in Telegram. A value Telegram would not offer is refused here too. Changes show on both sides at once.
 
-- **Who may call them.** `settings.getMine` and `settings.updateMine` are «My settings»: every key holder (the owner and executors) reads and changes their own. Everything else is the owner's, as in Telegram: an executor's key gets `Forbidden`.
-- **Every read lists what each field takes now** in `options`: the providers that can run, the tiers the chosen provider has, the effort levels it offers. A write takes only those. `InvalidInput` says what was wrong and lists the values; `Conflict` means the bot's state does not allow it now (your own defaults on a provider not installed or not logged in, a voice with no ElevenLabs key, a write mode with no Telegram account). Nothing is stored when any field of a request is refused.
-- **A write changes only the fields sent** and answers the setting as it now stands. Fields of one request are checked together: `{"provider":"claude","model":"sol"}` checks `sol` against Claude.
-- **Models are tiers** (`luna`, `terra`, `sol`, `astra`, weakest first), which each provider runs on its own model, plus `default` (the provider's own) and, in your own defaults where it can be routed, `auto` (the model router picks). On pi, which has no tiers, `model` takes a pi model by name (`provider/id`) from `options.model`.
-- **Provider settings** are those `/settings` → «Providers» shows, by the provider's own key. `null` unsets one. Only the listed keys can be set; nothing else of the provider's config is reachable.
-- **Not here:** secrets (an ElevenLabs key shows only as `configured`, the Telegram account only as its `status`), the bot's persona and Telegram profile (the `bot-profile` skill), access and trusted groups (`/users`, the `bot-access` skill), linking a workspace (`/setworkspace` in the group itself; the API only unlinks it), and one conversation's `/model`, `/effort` or `/provider` (an API run never continues a conversation).
+| Endpoints | Who |
+| --- | --- |
+| `settings.getMine`, `settings.updateMine` («My settings») | Every key holder (owner and executors), for their own. |
+| All other `settings.*` | Owner only. An executor's key gets `Forbidden`. |
+
+- **`options`**: every read lists what each field takes now (runnable providers, tiers, effort levels). A write takes only those values.
+- **Errors**: `InvalidInput` lists the allowed values. `Conflict` means bot state blocks it, for example your own defaults on a provider not installed or not logged in, a voice with no ElevenLabs key, or a write mode with no Telegram account.
+- **Atomic**: nothing is stored if any field of a request is refused. Fields are checked together: `{"provider":"claude","model":"sol"}` checks `sol` against Claude.
+- **Partial writes**: a write changes only the fields sent and answers with the setting as it now stands.
+- **Models** are tiers: `luna`, `terra`, `sol`, `astra`, weakest first. Each provider runs a tier on its own model. `default` is the provider's own. `auto` (the model router picks) works in your own defaults where it can be routed.
+- **pi** has no tiers. Its `model` takes a pi model by name (`provider/id`) from `options.model`.
+- **Provider settings** are those of `/settings` → «Providers», by the provider's own key. `null` unsets one. Only the listed keys can be set. Nothing else of the provider's config is reachable.
+
+**Not available here:**
+
+- Secrets. An ElevenLabs key shows only as `configured`, the Telegram account only as its `status`.
+- The bot's persona and Telegram profile (the `bot-profile` skill).
+- Access and trusted groups (`/users`, the `bot-access` skill).
+- Linking a workspace. Use `/setworkspace` in the group itself. The API only unlinks.
+- One conversation's `/model`, `/effort` or `/provider`. An API run never continues a conversation.
 
 ```bash
 curl -s -H "Authorization: Bearer $KEY" https://bot.example.com/v1/settings/mine
