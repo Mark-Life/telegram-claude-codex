@@ -1,21 +1,15 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(git log:*)",
-      "Bash(git diff:*)",
-      "Bash(git status:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
-    ]
-  },
   "hooks": {
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-lint-typecheck.sh",
-            "timeout": 60
+            "command": "bun x ultracite fix"
+          },
+          {
+            "type": "command",
+            "command": "bun x ultracite check"
           }
         ]
       }

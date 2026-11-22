@@ -1,0 +1,93 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index fabaa1cbfb85c9dfede32cdb0bc4893a243f2f7b..014c8a2ad0985c1dd0f1780d25a897f4115e5f90 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -262,6 +262,8 @@ type ThreadOptions = {
+     webSearchEnabled?: boolean;
+     approvalPolicy?: ApprovalMode;
+     additionalDirectories?: string[];
++    /** Patched: run without persisting session files to disk (`codex exec --ephemeral`). */
++    ephemeral?: boolean;
+ };
+ 
+ /**
+diff --git a/dist/index.js b/dist/index.js
+index 04492aee5c59991ef0d40b0752a62d4b93a21338..ed18b37e673233bf758bd8560d6c8c008b255ffb 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -74,7 +74,9 @@ var Thread = class {
+       webSearchMode: options?.webSearchMode,
+       webSearchEnabled: options?.webSearchEnabled,
+       approvalPolicy: options?.approvalPolicy,
+-      additionalDirectories: options?.additionalDirectories
++      additionalDirectories: options?.additionalDirectories,
++      // Patched: a throwaway thread writes no rollout.
++      ephemeral: options?.ephemeral
+     });
+     try {
+       for await (const item of generator) {
+@@ -141,7 +143,6 @@ function normalizeInput(input) {
+ import { spawn } from "child_process";
+ import { statSync } from "fs";
+ import path2 from "path";
+-import readline from "readline";
+ import { createRequire } from "module";
+ var INTERNAL_ORIGINATOR_ENV = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+ var TYPESCRIPT_SDK_ORIGINATOR = "codex_sdk_ts";
+@@ -209,6 +210,9 @@ var CodexExec = class {
+         commandArgs.push("--add-dir", dir);
+       }
+     }
++    if (args.ephemeral) {
++      commandArgs.push("--ephemeral");
++    }
+     if (args.skipGitRepoCheck) {
+       commandArgs.push("--skip-git-repo-check");
+     }
+@@ -293,12 +297,27 @@ var CodexExec = class {
+         });
+       }
+     );
+-    const rl = readline.createInterface({
+-      input: child.stdout,
+-      crlfDelay: Infinity
+-    });
++    // Patched: split stdout on "\n" only. readline also breaks lines on
++    // U+2028/U+2029, which codex emits unescaped inside JSON strings, so a tool
++    // result containing one was cut in half and failed to parse.
++    const readJsonLines = async function* (stream) {
++      const decoder = new TextDecoder();
++      let buffered = "";
++      for await (const chunk of stream) {
++        buffered += decoder.decode(chunk, { stream: true });
++        let newline = buffered.indexOf("\n");
++        while (newline !== -1) {
++          const line = buffered.slice(0, newline).replace(/\r$/, "");
++          buffered = buffered.slice(newline + 1);
++          if (line.length > 0) yield line;
++          newline = buffered.indexOf("\n");
++        }
++      }
++      buffered += decoder.decode();
++      if (buffered.length > 0) yield buffered;
++    };
+     try {
+-      for await (const line of rl) {
++      for await (const line of readJsonLines(child.stdout)) {
+         yield line;
+       }
+       if (spawnError) throw spawnError;
+@@ -309,8 +328,12 @@ var CodexExec = class {
+         throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
+       }
+     } finally {
+-      rl.close();
+       child.removeAllListeners();
++      // Patched: the child stays attached to the caller's AbortSignal. An abort
++      // after this point (a /stop or timeout after the turn already failed)
++      // makes node emit "error" on the child; with no listener that is an
++      // uncaught exception that takes the whole process down.
++      child.on("error", () => {});
+       try {
+         if (!child.killed) child.kill();
+       } catch {

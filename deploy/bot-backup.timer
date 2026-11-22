@@ -1,0 +1,14 @@
+; Runs bot-backup.service every night. Persistent=true means a machine that was
+; off at 03:20 takes the snapshot once it comes back, rather than skipping a day.
+; A user timer, like the units beside it — it needs linger to fire unattended.
+
+[Unit]
+Description=Nightly backup of the owner Telegram bot database
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

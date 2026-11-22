@@ -1,17 +1,3 @@
 {
-  "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "verbatimModuleSyntax": true,
-    "moduleDetection": "force",
-    "noImplicitOverride": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "noEmit": true,
-    "types": ["bun-types"]
-  },
-  "include": ["src", "scripts"]
+  "extends": "@workspace/typescript-config/base.json"
 }

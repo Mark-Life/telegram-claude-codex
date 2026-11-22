@@ -1,0 +1,24 @@
+; Nightly snapshot of .data/bot.db. Paired with bot-backup.timer; on its own it
+; is a one-shot you can run by hand with `systemctl --user start bot-backup`.
+;
+;   deploy/install.sh --with-backup    # or, by hand:
+;
+;   cp deploy/bot-backup.service deploy/bot-backup.timer ~/.config/systemd/user/
+;   ${EDITOR:-nano} ~/.config/systemd/user/bot-backup.service   # paths
+;   systemctl --user daemon-reload
+;   systemctl --user enable --now bot-backup.timer
+;
+; A user unit like bot.service: same account, no root, no User= line. Replace
+; the paths with the clone used by bot.service. Snapshots land in
+; .data/backups/bot-YYYYMMDD.db.gz and are pruned after 14 days
+; (BACKUP_KEEP_DAYS overrides).
+;
+; Logs: `journalctl --user -u bot-backup`.
+
+[Unit]
+Description=Backup the owner Telegram bot database
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/bot/workspace/owner-telegram-bot
+ExecStart=/home/bot/workspace/owner-telegram-bot/deploy/backup-bot-db.sh

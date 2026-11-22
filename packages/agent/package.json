@@ -1,0 +1,35 @@
+{
+  "name": "@workspace/agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./registry": "./src/registry.ts",
+    "./providers": "./src/providers.ts",
+    "./sandbox": "./src/sandbox/host.ts",
+    "./protected-files": "./src/protected-files.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsrs --noEmit --fast && bun run scripts/provider-settings-sync.ts --check"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.330",
+    "@anthropic-ai/sdk": "0.132.1",
+    "@effect/platform-bun": "4.0.0",
+    "@effect/sql-sqlite-bun": "4.0.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@openai/codex-sdk": "0.171.0",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "@workspace/core": "workspace:*",
+    "@workspace/db": "workspace:*",
+    "@workspace/env": "workspace:*",
+    "effect": "4.0.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@workspace/typescript-config": "workspace:*"
+  }
+}

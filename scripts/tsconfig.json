@@ -1,0 +1,10 @@
+{
+  "extends": "@workspace/typescript-config/base.json",
+  "compilerOptions": {
+    "module": "Preserve",
+    "moduleResolution": "Bundler",
+    "types": ["bun"],
+    "noEmit": true
+  },
+  "include": ["./**/*.ts"]
+}

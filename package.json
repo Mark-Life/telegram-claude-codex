@@ -1,45 +1,47 @@
 {
-  "name": "telegram-claude",
+  "name": "netxjs-monorepo",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "apps/*",
+      "packages/*",
+      "scripts",
+      "tools/oxlint/anti-slop"
+    ]
+  },
   "type": "module",
   "scripts": {
-    "start": "bun run src/index.ts",
-    "dev": "bun --watch run src/index.ts",
-    "auto-pr": "bun run scripts/auto-pr/index.ts",
-    "lint": "bunx --bun ultracite check",
-    "fix": "bunx --bun ultracite fix",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "test:watch": "bun test --watch",
-    "logs": "bash scripts/logs.sh runs",
-    "logs:errors": "bash scripts/logs.sh errors",
-    "logs:stats": "bash scripts/logs.sh stats",
-    "logs:follow": "bash scripts/logs.sh follow",
-    "backup": "bun run scripts/backup-db.ts",
-    "service": "bun run scripts/service.ts help",
-    "service:install": "bun run scripts/service.ts install",
-    "service:backup": "bun run scripts/service.ts backup",
-    "service:status": "bun run scripts/service.ts status",
-    "service:logs": "bun run scripts/service.ts logs",
-    "service:start": "bun run scripts/service.ts start",
-    "service:stop": "bun run scripts/service.ts stop",
-    "service:restart": "bun run scripts/service.ts restart",
-    "service:uninstall": "bun run scripts/service.ts uninstall",
-    "prepare": "husky"
-  },
-  "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.280",
-    "@effect/platform-bun": "4.0.0-beta.78",
-    "@openai/codex-sdk": "0.155.1",
-    "effect": "4.0.0-beta.78",
-    "execa": "^9.6.1",
-    "grammy": "^1.44.0",
-    "groq-sdk": "^0.37.0"
+    "build": "turbo build",
+    "check": "bunx --bun ultracite check --type-aware",
+    "dev": "turbo dev",
+    "fix": "bunx --bun ultracite fix --type-aware",
+    "format": "bun run fix",
+    "lint": "bun run check",
+    "prepare": "husky",
+    "provider-settings:sync": "bun run packages/agent/scripts/provider-settings-sync.ts",
+    "typecheck": "turbo typecheck",
+    "upgrade": "bun run scripts/upgrade.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.0",
-    "@types/bun": "latest",
+    "@oxlint/plugins": "1.94.0",
+    "@types/bun": "^1.4.1",
+    "@workspace/typescript-config": "workspace:*",
     "husky": "^9.1.7",
-    "typescript": "^5.7.0",
-    "ultracite": "7.2.3"
+    "oxfmt": "0.66.0",
+    "oxlint": "1.94.0",
+    "portless": "^0.15.6",
+    "tsrs": "0.25.0-ts7.1.0-beta",
+    "turbo": "^2.10.12",
+    "typescript": "7.0.2",
+    "ultracite": "7.10.8"
+  },
+  "engines": {
+    "bun": ">=1.4.0",
+    "node": ">=24.0.0"
+  },
+  "packageManager": "bun@1.4.0",
+  "patchedDependencies": {
+    "@openai/codex-sdk@0.171.0": "patches/@openai%2Fcodex-sdk@0.171.0.patch"
   }
 }

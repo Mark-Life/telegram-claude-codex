@@ -1,0 +1,22 @@
+{
+  "name": "@workspace/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./logger": "./src/logger.ts",
+    "./telemetry": "./src/telemetry.ts",
+    "./errors": "./src/clip-error.ts",
+    "./fs": "./src/atomic-write.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsrs --noEmit --fast"
+  },
+  "dependencies": {
+    "effect": "4.0.0"
+  },
+  "devDependencies": {
+    "@workspace/typescript-config": "workspace:*"
+  }
+}
