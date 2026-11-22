@@ -19,7 +19,7 @@ One long-running Bun process. It polls Telegram (no webhook, no public port; the
 
 `.data/` is git-ignored. It is the only thing worth backing up; everything else is a `git clone` away.
 
-The code is a Turborepo workspace. `apps/telegram` is the bot itself, `packages/agent` drives Codex, Claude Code and pi, `packages/db` owns the SQLite file, `packages/env` parses configuration, `packages/core` has the logger, `packages/api` is the HTTP API's contract (the server runs inside the bot). `apps/web` and `packages/ui` are an unused Next.js template kept for a future dashboard — they are never started by the bot and do not need configuring. `AGENTS.md` and `.docs/architecture/` describe the layout.
+The code is a Turborepo workspace. `apps/telegram` is the bot itself, `packages/agent` drives Codex, Claude Code and pi, `packages/db` owns the SQLite file, `packages/env` parses configuration, `packages/core` has the logger, `packages/api` is the HTTP API's contract (the server runs inside the bot). `apps/web` and `packages/ui` are an unused Next.js template kept for a future dashboard — they are never started by the bot and do not need configuring. `AGENTS.md` describes the layout.
 
 ## The service unit
 

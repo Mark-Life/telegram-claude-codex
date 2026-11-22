@@ -6,7 +6,7 @@ The same bot, a different door. Programs (Codex, ChatGPT through [Executor](http
 
 1. In `.env`: `API_ENABLED=true`, a free `API_PORT` (default `8787`) and `API_PUBLIC_URL`, the HTTPS address clients will use (for example `https://bot.example.com`). See [Configuration](configuration.md).
 2. Restart the bot. The journal says `HTTP API on 127.0.0.1:<port>, public at <url>`. If something else already holds the port (`wrangler dev` uses `8787` too), the bot still starts, without the API: the journal says `HTTP API not started: port <port> unavailable` and the owner gets a private message. Pick another `API_PORT` and restart.
-3. Put a reverse proxy with HTTPS in front of the port. The server always binds `127.0.0.1` and never terminates TLS itself. The README has a [Caddy example](../README.md#http-api-optional); `deploy/bot-api.caddy.example` is the same file.
+3. Put a reverse proxy with HTTPS in front of the port. The server always binds `127.0.0.1` and never terminates TLS itself. For Caddy, use [`deploy/bot-api.caddy.example`](../deploy/bot-api.caddy.example).
 4. Make a key: `/apikeys` in a private chat with the bot.
 
 Check it from the server: `curl -s http://127.0.0.1:8787/v1/health` answers `{"status":"ok"}`.
