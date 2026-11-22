@@ -1,0 +1,78 @@
+; systemd **user** unit for the Telegram bot. This file is a template that ships
+; with the repo; the setup copies it, not symlinks it.
+;
+;   deploy/install.sh          # fills in the paths below and installs it
+;
+; or the same thing by hand:
+;
+;   mkdir -p ~/.config/systemd/user
+;   cp deploy/bot.service ~/.config/systemd/user/bot.service
+;   ${EDITOR:-nano} ~/.config/systemd/user/bot.service   # WorkingDirectory, EnvironmentFile, ExecStartPre, ExecStart
+;   loginctl enable-linger "$USER"
+;   systemctl --user daemon-reload
+;   systemctl --user enable --now bot
+;
+; A user unit, not a system one: it runs as whoever installs it, so there is no
+; User= line and no root anywhere. `loginctl enable-linger` is what makes it
+; start at boot and keep running after you log out — without it the bot dies
+; with your ssh session. It needs no privileges either; polkit lets an account
+; set its own linger.
+;
+; The account that installs this is the account that owns WORK_DIR, and the one
+; `codex login` and `claude auth login` must be run as.
+;
+; The bot restarts itself after a self-update with
+; `systemd-run --user --on-active=5s systemctl --user restart bot`, which needs
+; no sudo rule.
+;
+; Logs: `journalctl --user -u bot -f`.
+
+[Unit]
+Description=Owner Telegram bot (codex)
+; The user manager has no network-online.target, so there is nothing to order
+; against here. It costs nothing: polling retries until the network is up.
+;
+; A boot that keeps crashing stops instead of looping, so a broken self-update
+; is visible rather than hidden behind a restart storm.
+StartLimitBurst=3
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+WorkingDirectory=/home/bot/workspace/owner-telegram-bot
+; Secrets and WORK_DIR live here, never in the unit: BOT_TOKEN, ALLOWED_USER_ID,
+; GROQ_API_KEY, WORK_DIR, the optional EXECUTOR_* variables and TYPESAFE_API_KEY.
+EnvironmentFile=/home/bot/workspace/owner-telegram-bot/.env
+; Keep bunx available to child Codex runs (notably the pre-commit hook). The
+; installer replaces the first directory with the directory of ExecStart's bun.
+; ~/.local/bin (%h is the service account's home) puts the CLIs a user installs
+; there, such as t3, on the PATH of every agent's shell, as a login shell has.
+; Provider CLIs need not be on it: the bot looks in ~/.local/bin, ~/bin,
+; ~/.bun/bin and the provider's own bin dir too, and uses every provider whose
+; CLI it finds logged in. A CLI elsewhere is named by its *_BIN in .env.
+Environment=PATH=/usr/local/bin:%h/.local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+; Install exactly what bun.lock names before every start, so a self-update or
+; an upstream merge that changed dependencies boots on them. A lockfile that
+; does not match package.json fails here, and the bot does not start on
+; half-installed modules. The installer sets the same bun as ExecStart.
+ExecStartPre=/usr/local/bin/bun install --frozen-lockfile
+ExecStart=/usr/local/bin/bun run apps/telegram/src/index.ts
+; SIGTERM is the graceful path: the entrypoint stops polling, lets accepted
+; work and every agent turn it started finish, then disposes the runtime and
+; exits 0. Its own drain deadline is 30 minutes; a second SIGTERM or SIGINT
+; does not cut it short.
+KillSignal=SIGTERM
+; mixed, not the default control-group: SIGTERM goes to bun alone. Every
+; `codex app-server` and `codex exec` the bot spawns (and its shells and
+; tools) lives in this cgroup; under control-group they would get SIGTERM at
+; the same moment as bun and die, leaving the drain nothing to wait for. The rest of the cgroup gets SIGKILL
+; only after bun exits or TimeoutStopSec runs out.
+KillMode=mixed
+TimeoutStopSec=32min
+; Polling that stops without a signal (a revoked token, a network failure
+; grammy gave up on) drains the same way and exits 1, so it is restarted.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

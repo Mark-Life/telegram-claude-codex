@@ -1,0 +1,12 @@
+{
+  "name": "@workspace/scripts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsrs --noEmit --fast"
+  },
+  "devDependencies": {
+    "@workspace/typescript-config": "workspace:*"
+  }
+}

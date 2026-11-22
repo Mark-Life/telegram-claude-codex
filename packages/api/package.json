@@ -1,0 +1,18 @@
+{
+  "name": "@workspace/api",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsrs --noEmit --fast"
+  },
+  "dependencies": {
+    "effect": "4.0.0"
+  },
+  "devDependencies": {
+    "@workspace/typescript-config": "workspace:*"
+  }
+}

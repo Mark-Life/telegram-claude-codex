@@ -1,0 +1,8 @@
+# The bot's HTTP API behind Caddy, which gets and renews the HTTPS
+# certificate itself. Replace the hostname with your own and the port with
+# API_PORT from .env. The bot binds 127.0.0.1 only; this site is the one way
+# in. Caddy appends the client's address to X-Forwarded-For, which the bot's
+# failed-key limit reads (the last entry).
+bot.example.com {
+	reverse_proxy 127.0.0.1:8787
+}
