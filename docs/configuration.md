@@ -12,8 +12,7 @@ Never put a comment on the same line as a value. systemd keeps a trailing `# ...
 | `ALLOWED_USER_ID` | yes | none | Numeric Telegram id of the owner. Only source of owner rights. Never stored, cannot be granted. |
 | `GROQ_API_KEY` | yes | none | Voice transcription. |
 | `ELEVENLABS_API_KEY` | no | unset | [ElevenLabs](https://elevenlabs.io) key for voice replies: a run asked to answer by voice sends a voice message (`send-voice-to-user.ts`). Pick voice and model in `/settings` → Voice replies. Unset: the run says voice is not set up and answers in text. Needs `ffmpeg` on the host. |
-| `WORK_DIR` | no | unset | The one directory all runs work in. Disables project switching. Overrules a stored project, a pinned topic and `PROJECTS_DIR`. The normal setup. |
-| `PROJECTS_DIR` | no | `/home/agent/projects` | Parent directory for runs when `WORK_DIR` is unset. |
+| `WORK_DIR` | yes | unset | The one directory all runs work in, for example `/home/bot/workspace`. User files live at its root, and this repo is cloned at `<WORK_DIR>/owner-telegram-bot`. |
 
 ## Providers
 

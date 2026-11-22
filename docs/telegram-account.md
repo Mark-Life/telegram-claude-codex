@@ -149,7 +149,7 @@ The confirmation says so in each case. A confirmation too long for one Telegram 
 
 | Rule | Value |
 | --- | --- |
-| Allowed path | A file the run made or you sent the bot: under the working directory (or `PROJECTS_DIR`) or the system temp dir. |
+| Allowed path | A file the run made or you sent the bot: under `WORK_DIR` or the system temp dir. |
 | Refused | `.data` (so downloaded media too), the repo's dotfiles, the provider CLIs' logins, and `.env*`, `credentials*`, `secrets*`, `*.pem`, `*.key`. Same list as `send-file-to-user`. |
 | File size | At most 50 MB. |
 | Photo size | At most 10 MB. |
