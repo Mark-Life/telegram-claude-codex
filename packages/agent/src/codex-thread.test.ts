@@ -61,6 +61,22 @@ describe("codexOptions", () => {
       mcp_servers: { group_memory: { default_tools_approval_mode: "approve" } },
     });
   });
+
+  test("the owner's shell gets BOT_TOKEN from the env, never from argv", () => {
+    const saved = process.env.BOT_TOKEN;
+    process.env.BOT_TOKEN = "123:secret-bot-token";
+    try {
+      const options = codexOptions({ access: OWNER_ACCESS });
+      expect(options.env?.BOT_TOKEN).toBe("123:secret-bot-token");
+      expect(options.config?.shell_environment_policy).toEqual({
+        ignore_default_excludes: true,
+        inherit: "all",
+      });
+      expect(JSON.stringify(options.config)).not.toContain("secret-bot-token");
+    } finally {
+      process.env.BOT_TOKEN = saved;
+    }
+  });
 });
 
 describe("autoCompactTokenLimit", () => {
