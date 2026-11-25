@@ -231,9 +231,12 @@ export const codexOptions = (input: {
     };
   }
   if (isSet(botToken)) {
+    // `env` already carries BOT_TOKEN. Turning off Codex's `*TOKEN*` default
+    // excludes lets shell commands see it without a copy in the config,
+    // which lands on argv where any local user can read it.
     config.shell_environment_policy = {
+      ignore_default_excludes: true,
       inherit: "all",
-      set: { BOT_TOKEN: botToken },
     };
   }
   const { sandbox } = input;
